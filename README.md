@@ -51,6 +51,11 @@ docker build -t mirrorstrike-container container/
 
 GitHub Actions 在推送/PR 到 `main` 分支时自动构建并推送镜像至 GitHub Container Registry。
 
+
+## 参考
+
+[Cairn](https://github.com/oritera/Cairn)
+
 ## 许可
 
 本项目仅用于合法的安全测试和教育目的。
