@@ -1,7 +1,9 @@
 FROM --platform=amd64 kalilinux/kali-rolling:latest
 
-RUN apt update && \
-    apt -y install kali-linux-headless && \
+RUN echo "deb http://mirrors.ustc.edu.cn/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
+    rm -f /etc/apt/sources.list.d/*.sources && \
+    apt -o Acquire::ForceIPv4=true update && \
+    apt -o Acquire::ForceIPv4=true -y install kali-linux-headless && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -9,8 +11,8 @@ RUN useradd -m -s /bin/bash kali && \
     echo "kali ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER kali
 
-RUN sudo apt update && \
-    sudo apt install -y bsdextrautils npm jq iputils-ping sshpass ncat rlwrap \
+RUN sudo apt -o Acquire::ForceIPv4=true update && \
+    sudo apt -o Acquire::ForceIPv4=true install -y bsdextrautils npm jq iputils-ping sshpass ncat rlwrap \
     bloodyad coercer enum4linux-ng pwncat chisel-common-binaries \
     dirsearch yq krb5-user gitleaks naabu nikto netexec adb && \
     sudo apt clean && \
@@ -20,12 +22,12 @@ RUN sudo apt update && \
     cd /tmp && playwright-cli install
 
 RUN cd /tmp && \
-    wget -q "https://github.com/projectdiscovery/katana/releases/download/v1.5.0/katana_1.5.0_linux_amd64.zip" -O katana.zip && \
-    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v3.7.1/nuclei_3.7.1_linux_amd64.zip" -O nuclei.zip && \
-    wget -q "https://github.com/hahwul/dalfox/releases/download/v2.12.0/dalfox-linux-amd64.tar.gz" -O dalfox.tar.gz && \
-    wget -q "https://github.com/BishopFox/cloudfox/releases/download/v2.0.1/cloudfox-linux-amd64.zip" -O cloudfox.zip && \
-    wget -q "https://github.com/ropnop/kerbrute/releases/download/v1.0.3/kerbrute_linux_amd64" -O kerbrute && \
-    git clone --depth 1 "https://github.com/projectdiscovery/nuclei-templates.git" /home/kali/.local/nuclei-templates && \
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/projectdiscovery/katana/releases/download/v1.5.0/katana_1.5.0_linux_amd64.zip" -O katana.zip && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/projectdiscovery/nuclei/releases/download/v3.7.1/nuclei_3.7.1_linux_amd64.zip" -O nuclei.zip && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/hahwul/dalfox/releases/download/v2.12.0/dalfox-linux-amd64.tar.gz" -O dalfox.tar.gz && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/BishopFox/cloudfox/releases/download/v2.0.1/cloudfox-linux-amd64.zip" -O cloudfox.zip && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/ropnop/kerbrute/releases/download/v1.0.3/kerbrute_linux_amd64" -O kerbrute && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth 1 "https://github.com/projectdiscovery/nuclei-templates.git" /home/kali/.local/nuclei-templates && exit 0; rm -rf /home/kali/.local/nuclei-templates; sleep 5; done; exit 1) && \
     unzip -q katana.zip katana && sudo mv katana /usr/local/bin/ && \
     unzip -q nuclei.zip nuclei && sudo mv nuclei /usr/local/bin/ && \
     tar -xzf dalfox.tar.gz && sudo mv dalfox-linux-amd64 /usr/local/bin/dalfox && \
@@ -35,27 +37,27 @@ RUN cd /tmp && \
     sudo rm -rf /tmp/*
 
 RUN mkdir -p /home/kali/knowledges && cd /home/kali/knowledges && \
-    git clone --depth=1 https://github.com/swisskyrepo/PayloadsAllTheThings.git && \
-    git clone --depth=1 https://github.com/swisskyrepo/InternalAllTheThings.git && \
-    git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks.git && \
-    git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks-cloud.git
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/swisskyrepo/PayloadsAllTheThings.git && exit 0; rm -rf PayloadsAllTheThings; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/swisskyrepo/InternalAllTheThings.git && exit 0; rm -rf InternalAllTheThings; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks.git && exit 0; rm -rf hacktricks; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks-cloud.git && exit 0; rm -rf hacktricks-cloud; sleep 5; done; exit 1)
 
 RUN mkdir -p /home/kali/tools && cd /home/kali/tools && \
-    wget -q "https://github.com/frohoff/ysoserial/releases/download/v0.0.6/ysoserial-all.jar" -O ysoserial.jar && \
-    git clone --depth=1 https://github.com/ticarpi/jwt_tool.git && \
-    cd jwt_tool && pip3 install -r requirements.txt --break-system-packages && \
-    git clone --depth=1 https://github.com/IOActive/jdwp-shellifier.git
+    (for i in 1 2 3 4 5; do wget -q --timeout=60 "https://github.com/frohoff/ysoserial/releases/download/v0.0.6/ysoserial-all.jar" -O ysoserial.jar && exit 0; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/ticarpi/jwt_tool.git && exit 0; rm -rf jwt_tool; sleep 5; done; exit 1) && \
+    cd jwt_tool && pip3 install -r requirements.txt --break-system-packages && cd .. && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/IOActive/jdwp-shellifier.git && exit 0; rm -rf jdwp-shellifier; sleep 5; done; exit 1)
 
 RUN mkdir -p /home/kali/pocs && cd /home/kali/pocs && \
-    git clone --depth=1 https://github.com/iSee857/CVE-PoC.git && \
-    git clone --depth=1 https://github.com/zhzyker/exphub.git && \
-    git clone --depth=1 https://github.com/passwa11/2023Hvv_.git && \
-    git clone --depth=1 https://github.com/Threekiii/Awesome-POC.git && \
-    git clone --depth=1 https://github.com/vulhub/vulhub.git
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/iSee857/CVE-PoC.git && exit 0; rm -rf CVE-PoC; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/zhzyker/exphub.git && exit 0; rm -rf exphub; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/passwa11/2023Hvv_.git && exit 0; rm -rf 2023Hvv_; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/Threekiii/Awesome-POC.git && exit 0; rm -rf Awesome-POC; sleep 5; done; exit 1) && \
+    (for i in 1 2 3 4 5; do git clone --depth=1 https://github.com/vulhub/vulhub.git && exit 0; rm -rf vulhub; sleep 5; done; exit 1)
     
-RUN sudo npm install -g @openai/codex
-RUN sudo npm install -g @anthropic-ai/claude-code
-RUN sudo npm install -g @mariozechner/pi-coding-agent
+RUN (for i in 1 2 3 4 5; do sudo npm install -g @openai/codex && exit 0; sleep 5; done; exit 1)
+RUN (for i in 1 2 3 4 5; do sudo npm install -g @anthropic-ai/claude-code && exit 0; sleep 5; done; exit 1)
+RUN (for i in 1 2 3 4 5; do sudo npm install -g @mariozechner/pi-coding-agent && exit 0; sleep 5; done; exit 1)
 
 RUN sudo chmod +x /usr/local/bin/kerbrute
 RUN mkdir -p /home/kali/.config/nuclei && \
