@@ -74,5 +74,8 @@ ENV PLAYWRIGHT_MCP_BROWSER=chromium
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 ENV PYTHONUNBUFFERED=1
 
+# 安装jdk8
+RUN curl -s "https://get.sdkman.io" | bash && source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java 8.0.482.fx-zulu
+
 RUN sudo mkdir -p /opt/mirrorstrike/claude-code /opt/workspace
 WORKDIR /opt/mirrorstrike/claude-code
