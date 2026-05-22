@@ -74,7 +74,11 @@ ENV PYTHONUNBUFFERED=1
 
 
 # 安装jdk8
-RUN curl -s "https://get.sdkman.io" | bash && source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install java 8.0.482.fx-zulu
+RUN curl -s "https://get.sdkman.io" | bash && \
+    bash -c "source $HOME/.sdkman/bin/sdkman-init.sh && sdk install java 8.0.482.fx-zulu" && \
+    rm -rf $HOME/.sdkman/archives/* $HOME/.sdkman/tmp/*
+ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
+ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:$PATH
 
 RUN sudo mkdir -p /opt/mirrorstrike/claude-code /opt/workspace
 WORKDIR /opt/mirrorstrike/claude-code
