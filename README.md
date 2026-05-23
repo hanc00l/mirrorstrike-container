@@ -12,7 +12,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 ## 构建
 
 ```bash
-docker build -t mirrorstrike-container container/
+docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest container/
 ```
 
 ## 包含的工具
