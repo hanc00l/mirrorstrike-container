@@ -81,5 +81,6 @@ RUN curl -s "https://get.sdkman.io" | bash && \
 ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
 ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:$PATH
 
-RUN sudo mkdir -p /opt/mirrorstrike/claude-code /opt/workspace
+RUN sudo mkdir -p /opt/mirrorstrike/claude-code /opt/mirrorstrike/logs/agent /opt/workspace /opt/tools && \
+    sudo chown -R kali:kali /opt/mirrorstrike /opt/workspace /opt/tools
 WORKDIR /opt/mirrorstrike/claude-code
