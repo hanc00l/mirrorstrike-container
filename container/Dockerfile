@@ -82,7 +82,7 @@ ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
 ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:$PATH
 
 # agent-browser
-RUN sudo apt -o Acquire::ForceIPv4=true update && sudo apt -o Acquire::ForceIPv4=true install -y xvfb libgtk-3-0 libgbm1 && sudo apt clean
+RUN sudo apt update && sudo apt install -y xvfb libgtk-3-0 libgbm1 && sudo apt clean
 RUN sudo npm install -g agent-browser && \
     sudo mkdir -p /opt/chrome && cd /opt/chrome && \
     sudo wget -q "https://registry.npmmirror.com/-/binary/chrome-for-testing/149.0.7827.54/linux64/chrome-linux64.zip" && \
