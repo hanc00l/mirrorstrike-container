@@ -81,6 +81,17 @@ RUN curl -s "https://get.sdkman.io" | bash && \
 ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
 ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:$PATH
 
+# agent-browser
+RUN sudo apt -o Acquire::ForceIPv4=true update && sudo apt -o Acquire::ForceIPv4=true install -y xvfb libgtk-3-0 libgbm1 && sudo apt clean
+RUN sudo npm install -g agent-browser && \
+    sudo mkdir -p /opt/chrome && cd /opt/chrome && \
+    sudo wget -q "https://registry.npmmirror.com/-/binary/chrome-for-testing/149.0.7827.54/linux64/chrome-linux64.zip" && \
+    sudo unzip -q chrome-linux64.zip && sudo rm chrome-linux64.zip
+ENV AGENT_BROWSER_CHROME_PATH=/opt/chrome/chrome-linux64/chrome
+ENV DISPLAY=:99
+RUN echo 'alias agent-browser="xvfb-run agent-browser"' >> /home/kali/.bashrc
+RUN npx skills add vercel-labs/agent-browser --skill agent-browser -g -y
+
 RUN sudo mkdir -p /opt/mirrorstrike/claude-code /opt/mirrorstrike/logs/agent /opt/workspace /opt/tools && \
     sudo chown -R kali:kali /opt/mirrorstrike /opt/workspace /opt/tools
 WORKDIR /opt/mirrorstrike/claude-code
