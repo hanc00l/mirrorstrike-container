@@ -8,7 +8,6 @@ ARG DALFOX_VERSION=2.12.0
 ARG CLOUDFOX_VERSION=2.0.1
 ARG KERBRUTE_TAG=v1.0.3
 ARG TRIVY_VERSION=0.71.2
-ARG CHROME_VERSION=149.0.7827.54
 ARG JDK21=21.0.11.fx-zulu
 ARG JDK8=8.0.482.fx-zulu
 
@@ -40,7 +39,7 @@ RUN sudo apt-get update && \
       binwalk foremost steghide libc6-dbg libc6-dev \
       ruby ruby-dev \
       sqlmap hydra proxychains4 evil-winrm python3-impacket \
-      xvfb libgtk-3-0 libgbm1 && \
+      xvfb libgtk-3-0 libgbm1 chromium && \
     sudo apt-get clean && \
     sudo rm -rf /var/lib/apt/lists/*
 
@@ -96,7 +95,7 @@ RUN cd /home/kali/tools && \
     git clone --depth 1 https://github.com/IOActive/jdwp-shellifier.git
 
 # ---------- 9. AI 代理 + Playwright（--with-deps 自动按发行版装浏览器系统依赖，规避 libasound2/t64 包名问题）----------
-RUN sudo npm install -g @anthropic-ai/claude-code playwright && \
+RUN sudo npm install -g @anthropic-ai/claude-code playwright @playwright/mcp && \
     playwright install --with-deps chromium
 
 # ---------- 10. SDKMAN JDK 8 / 21，默认 JDK8（修复 sdk 在子 shell 失效；单引号 + ${JDK*} 文本替换避免 $HOME 被误展开）----------
@@ -116,13 +115,9 @@ ENV GHIDRA_JDK_HOME=/home/kali/.sdkman/candidates/java/21.0.11.fx-zulu
 RUN git clone --depth 1 https://github.com/pwndbg/pwndbg.git /home/kali/tools/pwndbg && \
     bash -c 'cd /home/kali/tools/pwndbg && ./setup.sh'
 
-# ---------- 12. agent-browser + Chrome for Testing（修正环境变量名：CHROME_PATH → EXECUTABLE_PATH）----------
-RUN sudo npm install -g agent-browser && \
-    sudo mkdir -p /opt/chrome && cd /opt/chrome && \
-    sudo wget -q --no-proxy --timeout=60 --tries=3 "https://registry.npmmirror.com/-/binary/chrome-for-testing/${CHROME_VERSION}/linux64/chrome-linux64.zip" && \
-    sudo unzip -q chrome-linux64.zip && sudo rm chrome-linux64.zip && \
-    sudo chmod -R 755 /opt/chrome
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/chrome/chrome-linux64/chrome \
+# ---------- 12. agent-browser（渲染走 apt chromium，已弃用 Chrome for Testing）----------
+RUN sudo npm install -g agent-browser
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     DISPLAY=:99
 
 # ---------- 13. agent-browser skill（非标准 CLI，失败不阻断构建）----------
@@ -136,12 +131,25 @@ RUN printf '%s\n' 'PS1="${PS1%\\n*} \[\033[0;36m\]\D{%y-%m-%d} - \t\[\033[;32m\]
     git -C /home/kali/workspace config user.email "agent@mirrorstrike" && \
     git -C /home/kali/workspace config user.name "mirrorstrike-agent"
 
-# ---------- 15. 清理 + entrypoint（常驻 Xvfb，解决 DISPLAY=:99 无服务）----------
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+# ---------- 15. Claude Code MCP 预配置（Playwright MCP + agent-browser 统一走 apt chromium）----------
+RUN claude mcp add playwright --scope user -- playwright-mcp --browser chromium --executable-path /usr/bin/chromium --allow-unrestricted-file-access --headless || \
+    echo "[warn] MCP 配置失败，可手动运行: claude mcp add playwright --scope user -- playwright-mcp --browser chromium --executable-path /usr/bin/chromium --allow-unrestricted-file-access --headless"
+
+# ---------- 16. 清理 + entrypoint（常驻 Xvfb，解决 DISPLAY=:99 无服务）----------
 RUN sudo rm -rf /usr/lib/llvm-*/build 2>/dev/null || true
 RUN sudo tee /usr/local/bin/docker-entrypoint.sh > /dev/null <<'EOF'
 #!/bin/sh
 if command -v Xvfb >/dev/null 2>&1 && [ -n "$DISPLAY" ]; then
+  # 清理可能残留的锁文件（容器重建或异常退出后遗留）
+  lockfile="/tmp/.${DISPLAY#*:}-lock"
+  [ -f "$lockfile" ] && rm -f "$lockfile"
   Xvfb "$DISPLAY" -screen 0 1280x800x24 -ac >/tmp/xvfb.log 2>&1 &
+  # 等待 Xvfb 就绪（最多 2 秒）
+  for i in 1 2 3 4; do
+    xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
 fi
 exec "$@"
 EOF
