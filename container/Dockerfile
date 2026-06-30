@@ -35,7 +35,7 @@ RUN sudo apt-get update && \
       bsdextrautils npm jq iputils-ping sshpass ncat rlwrap \
       bloodyad coercer enum4linux-ng pwncat chisel-common-binaries \
       dirsearch yq krb5-user gitleaks naabu nikto netexec adb \
-      gdb python3.14 ghidra strace file gdb-multiarch patchelf qemu-user qemu-user-static \
+      gdb python3.14 python3.14-dev python3.14-venv ghidra strace file gdb-multiarch patchelf qemu-user qemu-user-static \
       binwalk foremost steghide libc6-dbg libc6-dev \
       ruby ruby-dev \
       sqlmap hydra proxychains4 evil-winrm python3-impacket \
