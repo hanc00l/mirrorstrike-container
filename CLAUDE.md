@@ -7,13 +7,19 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 ```
 .
 ├── container/
-│   └── Dockerfile          # Docker 镜像构建文件
+│   ├── Dockerfile            # 完整版（四场景）Docker 镜像构建文件
+│   └── Dockerfile.pentest    # 轻量渗透测试版 Docker 镜像构建文件
 ├── .github/
 │   └── workflows/
-│       └── docker-build.yml # 自动化构建与推送工作流
+│       └── docker-build.yml  # 自动化构建与推送工作流（完整版 + 渗透版）
 ├── CLAUDE.md
 └── README.md
 ```
+
+## 镜像变体
+
+- **完整版**（`container/Dockerfile`）：四场景全覆盖，~4-6 GB
+- **渗透版**（`container/Dockerfile.pentest`）：纯渗透测试 + AI 代理 + 浏览器，~2-3 GB；去掉 Ghidra、pwndbg、pwntools、CTF/审计工具和 JDK 21
 
 ## 任务场景与工具
 
@@ -33,7 +39,9 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 ## 自动化构建
 
-推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像至 `ghcr.io/hanc00l/mirrorstrike-container`。
+推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像至 `ghcr.io/hanc00l/mirrorstrike-container`：
+- `latest`（完整版）
+- `latest-pentest`（渗透版）
 
 ## 参考
 
