@@ -10,8 +10,6 @@ ARG KERBRUTE_TAG=v1.0.3
 ARG TRIVY_VERSION=0.71.2
 ARG JDK21=21.0.11.fx-zulu
 ARG JDK8=8.0.482.fx-zulu
-ARG PI_AGENT_VERSION=0.83.0
-ARG MCP_SDK_VERSION=1.30.0
 
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
@@ -103,16 +101,16 @@ RUN cd /home/kali/tools && \
 # 镜像侧提供 /opt/mirrorstrike/node_modules 软链（指向全局包目录）作为解析兜底。
 RUN sudo npm install -g \
       @anthropic-ai/claude-code \
-      @earendil-works/pi-coding-agent@${PI_AGENT_VERSION} \
-      @modelcontextprotocol/sdk@${MCP_SDK_VERSION} \
+      @earendil-works/pi-coding-agent \
+      @modelcontextprotocol/sdk \
       playwright \
       @playwright/mcp && \
     playwright install --with-deps chromium && \
     sudo ln -sfn /usr/local/lib/node_modules /opt/mirrorstrike/node_modules
 
-# ---------- 9b. Node 版本校验（pi-coding-agent 0.83 要求 Node >= 22.19）+ pi CLI 冒烟 ----------
+# ---------- 9b. Node 版本校验（pi-coding-agent 要求 Node >= 22.19）+ pi CLI 冒烟 ----------
 RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
-    test "$(pi --version)" = "${PI_AGENT_VERSION}" || { echo "[fatal] pi 版本不符: $(pi --version) != ${PI_AGENT_VERSION}"; exit 1; }
+    pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
 
 # ---------- 10. SDKMAN JDK 8 / 21，默认 JDK8（修复 sdk 在子 shell 失效；单引号 + ${JDK*} 文本替换避免 $HOME 被误展开）----------
 RUN curl -s "https://get.sdkman.io" | bash && \
@@ -171,6 +169,8 @@ exec "$@"
 EOF
 RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh
 
-WORKDIR /opt/mirrorstrike/claude-code
+# 默认工作目录保持中立：Agent 进程的实际 cwd 由 wrapper 按执行器设置
+# （claude → claude-code，pi → pi-agent），WORKDIR 仅影响 docker run/exec 的默认 shell 位置
+WORKDIR /opt/mirrorstrike
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]

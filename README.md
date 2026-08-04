@@ -44,12 +44,16 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 |---|---|
 | `/opt/tools` | 第三方工具（用户挂载）|
 | `/opt/workspace` | 工作目录（用户挂载）|
-| `/opt/mirrorstrike/claude-code` | Claude Code 工作区（默认 WORKDIR）|
+| `/opt/mirrorstrike/claude-code` | Claude Code 工作区 |
 | `/opt/mirrorstrike/pi-agent` | pi 执行器共享层（只读；扩展、CLAUDE.md、models.json）|
 | `/opt/mirrorstrike/pi-agent/agents` | pi 会话层（可写，仅会话文件）|
 | `/opt/mirrorstrike/logs/agent` | Agent 日志 |
 
 内置工具位于 `/usr/local/bin` 与 `/home/kali/tools`，不占用上述挂载点。
+
+镜像默认 `WORKDIR` 为 `/opt/mirrorstrike`（中立位置）；Agent 进程的实际工作目录由
+Worker 按执行器设置——claude 为 `/opt/mirrorstrike/claude-code`，pi 为
+`/opt/mirrorstrike/pi-agent`。
 
 ## 完整版工具链
 
