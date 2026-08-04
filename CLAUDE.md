@@ -1,6 +1,6 @@
 # mirrorstrike-container
 
-MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景，预装完整工具链与 AI 编码代理（Claude Code）。
+MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景，预装完整工具链与 AI 编码代理（Claude Code / pi-coding-agent）。
 
 ## 项目结构
 
@@ -27,8 +27,8 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - **CTF**: pwntools, jwt_tool, binwalk, foremost, steghide, pycryptodome, z3-solver
 - **代码审计**: semgrep, trivy, gitleaks, nuclei
 - **Pwn / 逆向**: gdb + **pwndbg**, ghidra(JDK21), gdb-multiarch, patchelf, qemu-user / qemu-user-static, ROPgadget, ropper, one_gadget, libc6-dbg
-- **AI 代理**: claude-code（codex / pi-coding-agent 已移除）
-- **浏览器自动化**: playwright (chromium), agent-browser + Chrome for Testing（entrypoint 自动启 Xvfb `:99`）
+- **AI 代理**: claude-code / pi-coding-agent
+- **浏览器自动化**: playwright (chromium), agent-browser（渲染走 apt chromium；entrypoint 自动启 Xvfb `:99`）
 
 ## 关键约定（修改 Dockerfile 必读）
 
@@ -36,6 +36,8 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - **JDK 策略**: 默认 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）；Ghidra 12.x 需 JDK 21，经 `GHIDRA_JDK_HOME` 单独指向，**改默认 JDK 会破坏 Ghidra**。
 - **pwndbg**: 必须以运行用户（kali）身份安装、固定路径 `/home/kali/tools/pwndbg`（setup.sh 会写 `~/.gdbinit`）；勿以 root 安装（否则配置落到 `/root`，kali 加载不到）。
 - **apt 源**: 第 1 步已固定到 `kali.download`，避免默认 `http.kali.org` 重定向到失效 mirror（neusoft）；CI 与本地都受益。
+- **pi 执行器依赖**: `@earendil-works/pi-coding-agent`（锁定版本 ARG）与 `@modelcontextprotocol/sdk` 随镜像全局安装；`/opt/mirrorstrike/node_modules` 软链到 `$(npm root -g)`，供 pi 扩展（运行时位于宿主机挂载的 `/opt/mirrorstrike/pi-agent`，可能不含 node_modules）做 ESM 裸导入解析。**Node 必须 >= 22.19**，构建期有版本断言，升级 pi 主版本时需同步复核。
+- **pi 挂载点**: `/opt/mirrorstrike/pi-agent` 为只读共享层（扩展/CLAUDE.md/models.json），`/opt/mirrorstrike/pi-agent/agents` 为可写会话层；Dockerfile 仅建占位目录，不可向其中安装工具。
 
 ## 自动化构建
 

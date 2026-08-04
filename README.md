@@ -1,6 +1,6 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景，预装完整工具链与 AI 编码代理（Claude Code）。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景，预装完整工具链与 AI 编码代理（Claude Code / pi-coding-agent）。
 
 ## 镜像变体
 
@@ -28,7 +28,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 | 类别 | 完整版 | 渗透版 |
 |------|--------|--------|
 | 渗透工具（metasploit、nuclei、sqlmap 等）| ✅ | ✅ |
-| Claude Code + Playwright + agent-browser | ✅ | ✅ |
+| Claude Code + pi-coding-agent + Playwright + agent-browser | ✅ | ✅ |
 | JDK 8（ysoserial 等）| ✅ | ✅ |
 | JDK 21 + Ghidra | ✅ | ❌ |
 | pwndbg + GDB 调试链 | ✅ | ❌ |
@@ -45,6 +45,8 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 | `/opt/tools` | 第三方工具（用户挂载）|
 | `/opt/workspace` | 工作目录（用户挂载）|
 | `/opt/mirrorstrike/claude-code` | Claude Code 工作区（默认 WORKDIR）|
+| `/opt/mirrorstrike/pi-agent` | pi 执行器共享层（只读；扩展、CLAUDE.md、models.json）|
+| `/opt/mirrorstrike/pi-agent/agents` | pi 会话层（可写，仅会话文件）|
 | `/opt/mirrorstrike/logs/agent` | Agent 日志 |
 
 内置工具位于 `/usr/local/bin` 与 `/home/kali/tools`，不占用上述挂载点。
@@ -65,8 +67,14 @@ gdb + pwndbg、ghidra（JDK 21）、gdb-multiarch、patchelf、qemu-user / qemu-
 
 ### AI 代理与浏览器
 - [Claude Code](https://github.com/anthropics/claude-code)
+- [pi-coding-agent](https://github.com/earendil-works/pi-mono)（`pi` CLI，锁定 0.83.0；Node >= 22.19，构建期有版本断言）
 - Playwright（Chromium）
-- agent-browser + Chrome for Testing（headless；Xvfb `:99` 由 entrypoint 自动启动）
+- agent-browser（渲染走 apt chromium，headless；Xvfb `:99` 由 entrypoint 自动启动）
+
+pi 执行器复用 Claude Code 工作区的 `.claude/skills/*`（经 `--skill` 逐个挂载），MCP 工具经
+`pi-agent/extensions/mirrorstrike-mcp.ts` 适配注册；镜像内置
+`@modelcontextprotocol/sdk`，并在 `/opt/mirrorstrike/node_modules` 提供软链，供
+`/opt/mirrorstrike/pi-agent`（运行时由宿主机挂载）下的扩展做 ESM 依赖解析兜底。
 
 ## JDK 策略（完整版）
 
