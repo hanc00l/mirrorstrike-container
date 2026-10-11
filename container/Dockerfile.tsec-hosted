@@ -1,0 +1,132 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Dockerfile.tsec-hosted — tsecbench 托管模式 all-in-one 单镜像
+#
+# 方案：mirrorstrike 仓库 docs/tsecbench-hosted-mode-refactor-plan.md §4.5
+# 与兄弟 Dockerfile / Dockerfile.pentest 的关键差异：
+#   - 弃用 kali-linux-headless 元包（含 metasploit 全家，参考镜像 16.8GB 主因），
+#     改显式最小清单：渗透 + CTF + Pwn，无审计类（semgrep/gitleaks/trivy）
+#   - 无任何 GitHub 下载工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
+#     jwt_tool/jdwp-shellifier/pwndbg 全部取消）；nuclei/naabu 用 Kali 源版本
+#   - npm 全局仅 @earendil-works/pi-coding-agent（+ 可选 playwright 层），
+#     无 claude-code / codex / agent-browser
+#   - 单 JDK8（SDKMAN zulu，gsl5/mdut/JNDIExploit/ysoserial 反射链需 8）
+#   - 直接 root 运行（all-in-one 需 root 跑 PG；Agent 无容器边界）
+#   - 携带容器运行时：PostgreSQL / Redis / tini（entrypoint 自举三件套+调度器）
+#   - Go 二进制由构建编排方（mirrorstrike deploy/hosted/build-image.sh）宿主机编译后
+#     随主上下文以 bin/ 提供（对齐 deploy/build.sh 惯例，dir 型 build-context 无法
+#     承载 RUN 编译阶段）
+#   - /opt/tools 子集与 deepstrike-kit 经 --build-context tools-deepstrike 注入
+#     （docker import tools_deepstrike.tar.gz 而来，排除 shiro_attack/yak-engine/
+#      info-gather 的裁剪由 COPY 子集声明完成）
+#
+# 构建编排（含编译、上下文组装与门禁）在 mirrorstrike 仓库 deploy/hosted/build-image.sh：
+#   docker buildx build -f container/Dockerfile.tsec-hosted \
+#     --build-context tools-deepstrike=docker-image://tools-deepstrike:latest \
+#     -t mirrorstrike-agent:<ver> <应用树上下文（含 bin/ kb/ knowledge/ app/）>
+# =============================================================================
+FROM --platform=amd64 kalilinux/kali-rolling:latest
+
+# ---------- 版本号集中管理（改版本只动这里）----------
+ARG JDK8=8.0.482.fx-zulu
+# 可选浏览器层：WITH_PLAYWRIGHT=1 时安装 chromium + playwright npm（web 类 CTF 渲染）
+ARG WITH_PLAYWRIGHT=0
+
+ENV TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MIRRORSTRIKE_RUN_MODE=hosted \
+    NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
+
+# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror）----------
+RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+# ---------- 2. apt 工具大合并（渗透 + CTF + Pwn，显式最小清单，无元包/无审计/无 metasploit）----------
+# whatweb/nikto/dirsearch 明确不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bsdextrautils npm jq yq curl wget ca-certificates tini procps iproute2 \
+      postgresql redis-server \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf \
+      hydra john \
+      python3-impacket evil-winrm netexec smbclient \
+      enum4linux-ng bloodyad proxychains4 sshpass chisel-common-binaries \
+      netcat-openbsd socat tcpdump tshark dnsutils whois \
+      gdb gdb-multiarch binwalk foremost steghide exiftool \
+      unzip p7zip-full unrar-free xz-utils patchelf \
+      qemu-user qemu-user-static libc6-dbg libc6-dev \
+      python3 python3-pip python3-venv \
+      ruby sudo less vim-tiny file && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 不装）----------
+RUN pip3 install --break-system-packages \
+      pwntools ROPgadget ropper z3-solver pycryptodome requests beautifulsoup4 && \
+    gem install one_gadget --no-document
+
+# ---------- 4. AI 执行器：仅 pi-coding-agent（无 claude-code/codex/agent-browser）----------
+# pi 扩展 extensions/mirrorstrike-mcp.ts 裸导入 @modelcontextprotocol/sdk；
+# 镜像内 pi-agent 工作区自带 node_modules（build-image.sh 组装），全局包仅为 pi CLI
+# 与 SDK 解析兜底。
+RUN npm install -g @earendil-works/pi-coding-agent @modelcontextprotocol/sdk
+
+# Node 版本门（pi-coding-agent 要求 >= 22.19）+ pi CLI 冒烟
+RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
+    pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
+
+# ---------- 5. 可选浏览器层（--build-arg WITH_PLAYWRIGHT=1）----------
+RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
+      apt-get clean && rm -rf /var/lib/apt/lists/* && \
+      npm install -g playwright @playwright/mcp; \
+    fi
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# ---------- 6. SDKMAN JDK8（单 JDK：反序列化利用链对新 JDK 兼容差）----------
+RUN curl -s "https://get.sdkman.io" | bash && \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
+              sdk install java ${JDK8} && \
+              sdk default java ${JDK8}' && \
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
+ENV JAVA_HOME=/root/.sdkman/candidates/java/current
+ENV PATH=/root/.sdkman/candidates/java/current/bin:${PATH}
+
+# ---------- 7. nuclei 离线模板指向镜像内路径（禁联网更新）----------
+RUN mkdir -p /root/.config/nuclei && \
+    printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/nuclei-templates' \
+      > /root/.config/nuclei/config.yaml
+
+# ---------- 8. 目录占位（运行时挂载点：本地仿真 bind mount）----------
+RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
+                 /opt/mirrorstrike/state /opt/mirrorstrike/logs/agent \
+                 /opt/mirrorstrike/pi-agent/agents
+
+# ---------- 9. 离线工具（--build-context tools-deepstrike：/opt/tools 子集 + deepstrike-kit）----------
+# 注：tools-deepstrike 镜像含完整 /opt/tools；此处仅 COPY 托管裁剪子集
+#（shiro_attack / yak-engine / info-gather 不进镜像，方案 §4.5.2）
+COPY --from=tools-deepstrike /opt/tools/frp          /opt/tools/frp
+COPY --from=tools-deepstrike /opt/tools/fscan        /opt/tools/fscan
+COPY --from=tools-deepstrike /opt/tools/gsl5-cli     /opt/tools/gsl5-cli
+COPY --from=tools-deepstrike /opt/tools/mdut-cli     /opt/tools/mdut-cli
+COPY --from=tools-deepstrike /opt/tools/JNDIExploit  /opt/tools/JNDIExploit
+COPY --from=tools-deepstrike /opt/tools/ysoserial    /opt/tools/ysoserial
+COPY --from=tools-deepstrike /opt/tools/suo5         /opt/tools/suo5
+# deepstrike-kit（MCP 入口；yak 通道随 yak-engine 缺席降级，gsl5/mdut bash 技能兜底）
+COPY --from=tools-deepstrike /opt/deepstrike         /opt/deepstrike
+
+# ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
+COPY kb/nuclei-templates/   /opt/kb/nuclei-templates/
+COPY kb/Vulnerability-Wiki/ /opt/kb/Vulnerability-Wiki/
+COPY knowledge/             /opt/mirrorstrike/knowledge/
+
+# ---------- 11. 应用树（主上下文：能力文件 + pi-agent 工作区 + hosted 配置/脚本）----------
+COPY app/                   /opt/mirrorstrike/
+# Go 二进制（构建编排方宿主机编译，随主上下文 bin/ 提供）
+COPY bin/                   /opt/mirrorstrike/bin/
+
+WORKDIR /opt/mirrorstrike
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/mirrorstrike/deploy/hosted/entrypoint.sh"]
+CMD ["run"]
