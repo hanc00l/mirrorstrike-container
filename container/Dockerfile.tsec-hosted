@@ -47,11 +47,15 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 
 # ---------- 2. apt 工具大合并（渗透 + CTF + Pwn，显式最小清单，无元包/无审计/无 metasploit）----------
 # whatweb/nikto/dirsearch 明确不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
+# 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
+# /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包：
+# seclists(全套 1.8GB) / dirb(quick|common 字典) / wordlists(rockyou) / dnsrecon(DNS 枚举字典)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       bsdextrautils npm jq yq curl wget ca-certificates tini procps iproute2 \
       postgresql redis-server \
       nmap masscan nuclei naabu sqlmap gobuster ffuf \
+      seclists dirb dnsrecon wordlists \
       hydra john \
       python3-impacket evil-winrm netexec smbclient \
       enum4linux-ng bloodyad proxychains4 sshpass chisel-common-binaries \
