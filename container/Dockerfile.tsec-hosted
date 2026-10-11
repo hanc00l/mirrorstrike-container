@@ -1,4 +1,7 @@
-# syntax=docker/dockerfile:1.7
+# =============================================================================
+# 注：不写 `# syntax=` 指令——该指令会让 buildx 去 Docker Hub 拉 frontend 镜像，
+# 托管/离线环境常不可达；本文件只用到内置 frontend 支持的特性
+#（COPY --from=<named context> + --build-context），无需外部 frontend。
 # =============================================================================
 # Dockerfile.tsec-hosted — tsecbench 托管模式 all-in-one 单镜像
 #
@@ -62,8 +65,15 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 不装）----------
-RUN pip3 install --break-system-packages \
-      pwntools ROPgadget ropper z3-solver pycryptodome requests beautifulsoup4 && \
+# Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在
+# Python 3.14 下回溯出的 2019 年 3.12 源码包；apt 依赖闭包自动带上 capstone 等）。
+# ropper 不装：其依赖 filebytes 的 setup.py 使用 Python 3.12+ 移除的 ast.Str，
+# 在本底座不可构建且 Kali 无 apt 包；ROPgadget + pwntools ROP 已覆盖 gadget 需求。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3-pwntools python3-ropgadget python3-z3 \
+      python3-pycryptodome python3-requests python3-bs4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
     gem install one_gadget --no-document
 
 # ---------- 4. AI 执行器：仅 pi-coding-agent（无 claude-code/codex/agent-browser）----------
@@ -100,9 +110,10 @@ RUN mkdir -p /root/.config/nuclei && \
       > /root/.config/nuclei/config.yaml
 
 # ---------- 8. 目录占位（运行时挂载点：本地仿真 bind mount）----------
+# 注：logs/ 不预置——entrypoint 运行时自建，预置空目录会被密钥扫描按
+# “烘焙日志目录”规则误命中
 RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
-                 /opt/mirrorstrike/state /opt/mirrorstrike/logs/agent \
-                 /opt/mirrorstrike/pi-agent/agents
+                 /opt/mirrorstrike/state /opt/mirrorstrike/pi-agent/agents
 
 # ---------- 9. 离线工具（--build-context tools-deepstrike：/opt/tools 子集 + deepstrike-kit）----------
 # 注：tools-deepstrike 镜像含完整 /opt/tools；此处仅 COPY 托管裁剪子集
