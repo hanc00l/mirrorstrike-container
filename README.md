@@ -1,13 +1,14 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景，预装完整工具链与 AI 编码代理（Claude Code / pi-coding-agent）。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景。已按 `Dockerfile.tsec-hosted` 的思路完成精简重构：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
 
 ## 镜像变体
 
 | 变体 | 标签 | 用途 | 大小（估算）|
 |------|------|------|------------|
-| **完整版** | `latest` | 四场景全覆盖（渗透 + CTF + 审计 + Pwn）| ~4-6 GB |
-| **渗透版** | `latest-pentest` | 纯渗透测试 + AI 代理 + 浏览器自动化 | ~2-3 GB |
+| **完整版** | `latest` | 四场景精简清单（渗透 + CTF + 审计 + Pwn）| ~6.5 GB（旧完整版 16.8GB）|
+| **渗透版** | `latest-pentest` | 纯渗透测试 + AI 代理 + 浏览器自动化（旧变体）| ~2-3 GB |
+| **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis），仅用于托管仿真环境 | - |
 
 ## 快速开始
 
@@ -21,20 +22,20 @@ docker pull ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 ```
 
-## 渗透版 vs 完整版
+## 精简重构说明（完整版）
 
-渗透版（`-pentest`）去掉了 CTF、代码审计和 Pwn/逆向工具，保留完整的渗透测试和 AI 代理能力：
+参考 `container/Dockerfile.tsec-hosted` 的显式最小清单重构：
 
-| 类别 | 完整版 | 渗透版 |
-|------|--------|--------|
-| 渗透工具（metasploit、nuclei、sqlmap 等）| ✅ | ✅ |
-| Claude Code + pi-coding-agent + Playwright + agent-browser | ✅ | ✅ |
-| JDK 8（ysoserial 等）| ✅ | ✅ |
-| JDK 21 + Ghidra | ✅ | ❌ |
-| pwndbg + GDB 调试链 | ✅ | ❌ |
-| Pwn 工具（pwntools、ROPgadget、ropper 等）| ✅ | ❌ |
-| CTF 工具（binwalk、steghide、z3-solver 等）| ✅ | ❌ |
-| 审计工具（semgrep、trivy、gitleaks）| ✅ | ❌ |
+| 变更 | 说明 |
+|------|------|
+| 弃用 kali-linux-headless 元包 | 移除 metasploit 全家（旧镜像体积主因），改显式最小清单 |
+| 零 GitHub 下载 | katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 全部移除；nuclei/naabu 用 Kali 源版本 |
+| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底），移除 claude-code / agent-browser |
+| 单 JDK8 | SDKMAN Zulu；ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
+| playwright 默认内置 | apt chromium + npm playwright/@playwright/mcp，经平台 `mcp/mcp.json`（`--executable-path /usr/bin/chromium`）接线 |
+| 保留 sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
+| 无 server 端组件 | 不装 postgresql/redis-server/tini；PG/Redis 由平台侧提供 |
+| /opt 全挂载 | `tools`/`kb`/`workspace`/`deepstrike`/`traffic` 仅建占位目录，运行时 `-v` 注入 |
 
 ## 运行时挂载点
 
@@ -42,48 +43,45 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 
 | 路径 | 用途 |
 |---|---|
-| `/opt/tools` | 第三方工具（用户挂载）|
-| `/opt/workspace` | 工作目录（用户挂载）|
-| `/opt/mirrorstrike/claude-code` | Claude Code 工作区 |
+| `/opt/tools` | 第三方工具（fscan/gsl5-cli/mdut-cli/ysoserial/JNDIExploit/suo5/frp 等，只读挂载）|
+| `/opt/kb` | 知识库与 nuclei 模板（`/opt/kb/nuclei-templates`，只读挂载）|
+| `/opt/workspace` | 项目工作区（projects/<pid>，平台按任务目录细粒度挂载）|
+| `/opt/deepstrike` | deepstrike-kit MCP（入口文件存在才挂载，存在性门控）|
+| `/opt/traffic` | 流量存档 |
 | `/opt/mirrorstrike/pi-agent` | pi 执行器共享层（只读；扩展、CLAUDE.md、models.json）|
 | `/opt/mirrorstrike/pi-agent/agents` | pi 会话层（可写，仅会话文件）|
 | `/opt/mirrorstrike/logs/agent` | Agent 日志 |
 
-内置工具位于 `/usr/local/bin` 与 `/home/kali/tools`，不占用上述挂载点。
-
 镜像默认 `WORKDIR` 为 `/opt/mirrorstrike`（中立位置）；Agent 进程的实际工作目录由
-Worker 按执行器设置——claude 为 `/opt/mirrorstrike/claude-code`，pi 为
-`/opt/mirrorstrike/pi-agent`。
+Worker 设置为 `/opt/mirrorstrike/pi-agent`。镜像无 ENTRYPOINT——平台 Worker 统一以
+`--entrypoint tail -f /dev/null` 常驻容器并经 `docker exec` 拉起 Agent。
 
 ## 完整版工具链
 
 ### 渗透测试
-metasploit、netexec、pwncat、coercer、bloodyad、evil-winrm、impacket、sqlmap、hydra、proxychains4、nuclei（含模板）、katana、naabu、nikto、dirsearch、dalfox、cloudfox、kerbrute、enum4linux-ng、sshpass、chisel
+nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools` 挂载提供
 
 ### CTF
-pwntools、jwt_tool、binwalk、foremost、steghide、pycryptodome、z3-solver、requests、beautifulsoup4
+pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremost、steghide、exiftool、requests、beautifulsoup4
 
 ### 代码审计
-semgrep、trivy、gitleaks、nuclei（DAST）
+semgrep（`~/.local/bin`）、gitleaks、nuclei（DAST）
 
 ### Pwn 与逆向
-gdb + pwndbg、ghidra（JDK 21）、gdb-multiarch、patchelf、qemu-user / qemu-user-static、ROPgadget、ropper、one_gadget、libc6-dbg
+gdb + gdb-multiarch、strace、radare2、yara、patchelf、qemu-user / qemu-user-static、ROPgadget、one_gadget、libc6-dbg；ghidra/jadx/apktool/capa 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载
 
 ### AI 代理与浏览器
-- [Claude Code](https://github.com/anthropics/claude-code)
-- [pi-coding-agent](https://github.com/earendil-works/pi-mono)（`pi` CLI，锁定 0.83.0；Node >= 22.19，构建期有版本断言）
-- Playwright（Chromium）
-- agent-browser（渲染走 apt chromium，headless；Xvfb `:99` 由 entrypoint 自动启动）
+- [pi-coding-agent](https://github.com/earendil-works/pi-mono)（`pi` CLI；Node >= 22.19，构建期有版本断言）
+- Playwright + @playwright/mcp（浏览器走 apt chromium，无头；有头场景用 `xvfb-run` 兜底）
 
-pi 执行器复用 Claude Code 工作区的 `.claude/skills/*`（经 `--skill` 逐个挂载），MCP 工具经
-`pi-agent/extensions/mirrorstrike-mcp.ts` 适配注册；镜像内置
+pi 扩展经 `pi-agent/extensions/mirrorstrike-mcp.ts` 注册 MCP 工具；镜像内置
 `@modelcontextprotocol/sdk`，并在 `/opt/mirrorstrike/node_modules` 提供软链，供
 `/opt/mirrorstrike/pi-agent`（运行时由宿主机挂载）下的扩展做 ESM 依赖解析兜底。
 
 ## JDK 策略（完整版）
 
-- 默认 JDK **8**（Zulu，供 ysoserial 等老反序列化工具）— 由 sdkman 管理，`ENV JAVA_HOME/PATH` 已设，非交互 shell / agent 调用同样生效。
-- Ghidra 12.x 需 JDK 21，经 `GHIDRA_JDK_HOME` 单独指向 JDK 21，与默认 JDK 8 解耦。
+- 仅 JDK **8**（Zulu，供 ysoserial 等老反序列化工具）— 由 sdkman 管理，`ENV JAVA_HOME/PATH` 已设，非交互 shell / agent 调用同样生效。
+- 单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差；ghidra 等需要 JDK 21 的工具不在本镜像。
 
 ## 构建
 
@@ -95,7 +93,8 @@ docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest container/
 docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest-pentest -f container/Dockerfile.pentest container/
 ```
 
-> CI（GitHub Actions，国外网络）可直接构建。**国内本地构建**较慢且 `auth.docker.io` 易被 DNS 污染，需配置代理并预拉基础镜像。
+> CI（GitHub Actions，国外网络）可直接构建。**国内本地构建**较慢且 `auth.docker.io` 易被 DNS 污染，需配置代理并预拉基础镜像，例如：
+> `docker build --build-arg HTTP_PROXY=http://192.168.52.1:7890 --build-arg HTTPS_PROXY=http://192.168.52.1:7890 ...`（socks5 同端口亦可用）。
 
 ## 自动化构建
 

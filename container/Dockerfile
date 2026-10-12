@@ -1,176 +1,151 @@
-# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Dockerfile — mirrorstrike agent 执行容器（pi-only 精简版）
+#
+# 参考 Dockerfile.tsec-hosted 的显式最小清单重构，与旧完整版的关键差异：
+#   - 弃用 kali-linux-headless 元包（含 metasploit 全家，旧镜像 16.8GB 主因），
+#     改显式最小清单：渗透 + CTF + Pwn + 逆向（无 server 端组件）
+#   - 无任何 GitHub 下载工具（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/
+#     jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 全部取消）；nuclei/naabu
+#     用 Kali 源版本。ysoserial/JNDIExploit/suo5/frp/fscan 等自研/敏感工具与
+#     nuclei 模板均经运行时挂载提供（/opt/tools、/opt/kb，:ro）
+#   - AI 执行器仅 pi-coding-agent（+ MCP SDK 解析兜底），无 claude-code/agent-browser
+#   - Java 仅 JDK8（SDKMAN zulu）；ghidra 等 JDK21 工具由 reverse 专用镜像
+#     （mirrorstrike deploy/reverse-static）承载，agent 容器内以 radare2/gdb 兜底
+#   - playwright 为默认能力：apt chromium + npm playwright/@playwright/mcp
+#     （平台 mcp/mcp.json 以 --executable-path /usr/bin/chromium 接线，无头运行）
+#   - 保留 kali 用户 + sudo 免密（docker_profile=security 高安全档以镜像默认用户运行）
+#   - /opt/{tools,kb,workspace,deepstrike,traffic} 为运行时挂载点，仅建占位目录，
+#     Dockerfile 内不可写入任何内容
+#
+# 注：不写 `# syntax=` 指令——该指令会让 buildx 去 Docker Hub 拉 frontend 镜像，
+# 离线/受限环境常不可达；本文件只用到内置 frontend 支持的特性。
+# =============================================================================
 FROM --platform=amd64 kalilinux/kali-rolling:latest
 
 # ---------- 版本号集中管理（改版本只动这里）----------
-ARG KATANA_VERSION=1.5.0
-ARG NUCLEI_VERSION=3.7.1
-ARG DALFOX_VERSION=2.12.0
-ARG CLOUDFOX_VERSION=2.0.1
-ARG KERBRUTE_TAG=v1.0.3
-ARG TRIVY_VERSION=0.71.2
-ARG JDK21=21.0.11.fx-zulu
 ARG JDK8=8.0.482.fx-zulu
 
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-    PLAYWRIGHT_MCP_BROWSER=chromium
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_MCP_BROWSER=chromium \
+    NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
 
-# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror 如 neusoft；root 装 headless 元包）----------
-RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-    apt-get update && \
-    apt-get install -y kali-linux-headless && \
+# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror 如 neusoft）----------
+RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+# ---------- 2. apt 工具大合并（渗透 + CTF + Pwn + 逆向，显式最小清单，无元包/无 metasploit）----------
+# 清单基线取 Dockerfile.tsec-hosted；whatweb/nikto/dirsearch 明确不装
+#（nmap+sqlmap+gobuster/ffuf/feroxbuster+nuclei 覆盖 web 面）。
+# 相对 tsec 基线的增补均为平台承诺（skills/system SKILL.md「PATH 实测可用」清单）或 agent 刚需：
+#   git / openssh-client / iputils-ping / tmux / strace — coding agent、ssh 类利用与
+#     常驻隧道（tmux/nohup 为平台文档化的跨 Agent 存活手段）刚需
+#   radare2 / yara — 逆向/pwn 容器内主力（ghidra 随 JDK21 一并移除，正式逆向管线走
+#     reverse 专用镜像 run_reverse_tool），且 r2 为技能承诺
+#   feroxbuster / coercer / gitleaks — 枚举纪律 / 域渗透 / 审计的技能硬承诺
+#   chromium 栈 — playwright 浏览器；xvfb 供有头场景 xvfb-run 兜底
+# 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
+# /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl wget git sudo less vim-tiny file \
+      procps iproute2 iputils-ping tmux \
+      bsdextrautils npm jq yq \
+      openssh-client sshpass netcat-openbsd socat tcpdump tshark dnsutils whois proxychains4 \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
+      seclists dirb dnsrecon wordlists \
+      hydra john gitleaks \
+      python3-impacket evil-winrm netexec smbclient enum4linux-ng bloodyad coercer \
+      chisel-common-binaries \
+      gdb gdb-multiarch strace ltrace binutils xxd binwalk foremost steghide exiftool \
+      radare2 yara \
+      unzip p7zip-full unrar-free xz-utils patchelf \
+      qemu-user qemu-user-static libc6-dbg libc6-dev \
+      python3 python3-pip python3-venv python3-paramiko \
+      gcc \
+      ruby \
+      chromium xvfb libgtk-3-0 libgbm1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# ---------- 2. 用户 ----------
+# ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 在第 5 层以 pip --user 安装）----------
+# Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在 Python 3.14 下
+# 回溯出的 2019 年 3.12 源码包；apt 依赖闭包自动带上 capstone 等）。
+# ropper 不装：其依赖 filebytes 的 setup.py 使用 Python 3.12+ 移除的 ast.Str，
+# 在本底座不可构建且 Kali 无 apt 包；ROPgadget + pwntools ROP 已覆盖 gadget 需求。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3-pwntools python3-ropgadget python3-z3 \
+      python3-pycryptodome python3-requests python3-bs4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    gem install one_gadget --no-document
+
+# ---------- 4. 用户 + 目录占位 ----------
+# 高安全档（docker_profile=security）以镜像默认用户运行，kali(uid 1000) + sudo 免密必须保留。
+# /opt 各目录为运行时挂载点：tools/kb/workspace/deepstrike/traffic 由平台 -v 注入
+#（kb/tools/deepstrike 只读，workspace/traffic/日志/任务目录见 worker isolatedWorkspaceVolumes），
+# 镜像内不装任何工具；logs/ 仅建目录供日志卷挂载。
 RUN useradd -m -s /bin/bash kali && \
-    echo 'kali ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-
-# ---------- 3. apt 工具大合并（渗透 + CTF + Pwn + 审计）----------
-RUN sudo apt-get update && \
-    sudo apt-get install -y \
-      bsdextrautils npm jq iputils-ping sshpass ncat rlwrap \
-      bloodyad coercer enum4linux-ng pwncat chisel-common-binaries \
-      dirsearch yq krb5-user gitleaks naabu nikto netexec adb \
-      gdb python3.14 python3.14-dev python3.14-venv ghidra strace file gdb-multiarch patchelf qemu-user qemu-user-static \
-      binwalk foremost steghide libc6-dbg libc6-dev \
-      ruby ruby-dev \
-      sqlmap hydra proxychains4 evil-winrm python3-impacket \
-      xvfb libgtk-3-0 libgbm1 chromium && \
-    sudo apt-get clean && \
-    sudo rm -rf /var/lib/apt/lists/*
-
-# ---------- 4. 目录（/opt/tools、/opt/workspace 为运行时挂载点，仅占位；内置工具归 /home/kali/tools）----------
-RUN sudo mkdir -p /opt/tools /opt/workspace \
-                 /opt/mirrorstrike/claude-code /opt/mirrorstrike/logs/agent \
-                 /opt/mirrorstrike/pi-agent /opt/mirrorstrike/pi-agent/agents \
-                 /home/kali/tools /home/kali/workspace && \
-    sudo chown -R kali:kali /opt/tools /opt/workspace /opt/mirrorstrike \
-                              /home/kali/tools /home/kali/workspace
+    echo 'kali ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers && \
+    mkdir -p /opt/tools /opt/kb /opt/workspace /opt/deepstrike /opt/traffic \
+             /opt/mirrorstrike/pi-agent/agents /opt/mirrorstrike/logs/agent \
+             /home/kali/.config/nuclei && \
+    chown -R kali:kali /opt/tools /opt/kb /opt/workspace /opt/deepstrike /opt/traffic \
+                       /opt/mirrorstrike /home/kali/.config
 
 USER kali
 
-# ---------- 5. pip 工具合并（已删 angr；含审计 / CTF / Pwn）----------
-RUN pip3 install --user \
-      pwntools pymongo pycryptodome requests beautifulsoup4 \
-      semgrep ROPgadget ropper z3-solver && \
-    sudo gem install one_gadget --no-document
+# ---------- 5. semgrep（代码审计 SAST 兜底，技能承诺 ~/.local/bin/semgrep）----------
+RUN pip3 install --user semgrep
 
-# pip --user 工具（semgrep / ROPgadget / ropper 等）落在 ~/.local/bin，加入 PATH 供 agent 调用
+# pip --user 工具落在 ~/.local/bin，加入 PATH 供 agent 调用
 ENV PATH=/home/kali/.local/bin:${PATH}
 
-# ---------- 6. GitHub release 二进制 + nuclei 模板 ----------
-RUN mkdir -p /tmp/dl && cd /tmp/dl && \
-    wget -q "https://github.com/projectdiscovery/katana/releases/download/v${KATANA_VERSION}/katana_${KATANA_VERSION}_linux_amd64.zip" -O katana.zip && \
-    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" -O nuclei.zip && \
-    wget -q "https://github.com/hahwul/dalfox/releases/download/v${DALFOX_VERSION}/dalfox-linux-amd64.tar.gz" -O dalfox.tar.gz && \
-    wget -q "https://github.com/BishopFox/cloudfox/releases/download/v${CLOUDFOX_VERSION}/cloudfox-linux-amd64.zip" -O cloudfox.zip && \
-    wget -q "https://github.com/ropnop/kerbrute/releases/download/${KERBRUTE_TAG}/kerbrute_linux_amd64" -O kerbrute && \
-    wget -q "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -O trivy.tar.gz && \
-    unzip -q katana.zip katana && \
-    unzip -q nuclei.zip nuclei && \
-    tar -xzf dalfox.tar.gz && \
-    unzip -q cloudfox.zip cloudfox/cloudfox && \
-    tar -xzf trivy.tar.gz && \
-    chmod +x katana nuclei dalfox-linux-amd64 cloudfox/cloudfox kerbrute trivy && \
-    sudo mv katana nuclei cloudfox/cloudfox kerbrute trivy /usr/local/bin/ && \
-    sudo mv dalfox-linux-amd64 /usr/local/bin/dalfox && \
-    git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /home/kali/.local/nuclei-templates && \
-    sudo rm -rf /tmp/*
-
-# ---------- 7. nuclei 配置（heredoc；不再重复 -ut）----------
-RUN mkdir -p /home/kali/.config/nuclei && \
-    cat > /home/kali/.config/nuclei/config.yaml <<'EOF'
-disable-update-check: true
-update-template-dir: /home/kali/.local/nuclei-templates
-EOF
-
-# ---------- 8. Java / 反序列化工具（内置源码工具归 /home/kali/tools，不碰挂载点 /opt/tools）----------
-RUN cd /home/kali/tools && \
-    wget -q "https://github.com/frohoff/ysoserial/releases/download/v0.0.6/ysoserial-all.jar" -O ysoserial.jar && \
-    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
-    pip3 install --user -r jwt_tool/requirements.txt && \
-    git clone --depth 1 https://github.com/IOActive/jdwp-shellifier.git
-
-# ---------- 9. AI 代理（Claude Code + pi-coding-agent）+ Playwright + MCP SDK（--with-deps 自动按发行版装浏览器系统依赖，规避 libasound2/t64 包名问题）----------
-# pi 扩展 extensions/mirrorstrike-mcp.ts 通过 ESM 裸导入 @modelcontextprotocol/sdk；
-# 运行时 /opt/mirrorstrike/pi-agent 由宿主机挂载（可能不含 node_modules），
-# 镜像侧提供 /opt/mirrorstrike/node_modules 软链（指向全局包目录）作为解析兜底。
+# ---------- 6. AI 执行器：pi-coding-agent + playwright 浏览器 ----------
+# pi 扩展 extensions/mirrorstrike-mcp.ts 裸导入 @modelcontextprotocol/sdk，全局包为解析兜底；
+# 运行时 /opt/mirrorstrike/pi-agent 由宿主机只读挂载（可能不含 node_modules），
+# 镜像侧提供 /opt/mirrorstrike/node_modules 软链（指向全局包目录）作为 ESM 解析兜底。
+# playwright 走 apt chromium：PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 不下载浏览器，
+# 平台 mcp/mcp.json 以 --executable-path /usr/bin/chromium 接线，无头运行。
 RUN sudo npm install -g \
-      @anthropic-ai/claude-code \
       @earendil-works/pi-coding-agent \
       @modelcontextprotocol/sdk \
       playwright \
       @playwright/mcp && \
-    playwright install --with-deps chromium && \
-    sudo ln -sfn /usr/local/lib/node_modules /opt/mirrorstrike/node_modules
+    sudo ln -sfn "$(npm root -g)" /opt/mirrorstrike/node_modules
 
-# ---------- 9b. Node 版本校验（pi-coding-agent 要求 Node >= 22.19）+ pi CLI 冒烟 ----------
+# Node 版本门（pi-coding-agent 要求 >= 22.19）+ pi CLI 冒烟
 RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
     pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
 
-# ---------- 10. SDKMAN JDK 8 / 21，默认 JDK8（修复 sdk 在子 shell 失效；单引号 + ${JDK*} 文本替换避免 $HOME 被误展开）----------
+# ---------- 7. SDKMAN JDK8（单 JDK：反序列化利用链对新 JDK 兼容差；单引号 + ${JDK8} 文本替换避免 $HOME 被误展开）----------
 RUN curl -s "https://get.sdkman.io" | bash && \
     bash -lc 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
-              sdk install java ${JDK21} && \
               sdk install java ${JDK8} && \
               sdk default java ${JDK8}' && \
     rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
-# 默认 JDK8（sdkman current → 8.0.482）：设 ENV 让非交互 shell / agent 调用也走 JDK8（sdkman 仅在交互 ~/.bashrc 生效）
+# 默认 JDK8：设 ENV 让非交互 shell / agent 调用也走 JDK8（sdkman 仅在交互 ~/.bashrc 生效）
 ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
 ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:${PATH}
-# Ghidra(12.1.1) 需 JDK21；默认仍 JDK8，Ghidra 单独走 JDK21
-ENV GHIDRA_JDK_HOME=/home/kali/.sdkman/candidates/java/21.0.11.fx-zulu
 
-# ---------- 11. pwndbg（替换 GEF；固定路径，setup.sh 会把 source $PWD/gdbinit.py 写进 ~/.gdbinit）----------
-RUN git clone --depth 1 https://github.com/pwndbg/pwndbg.git /home/kali/tools/pwndbg && \
-    bash -c 'cd /home/kali/tools/pwndbg && ./setup.sh'
+# ---------- 8. nuclei 离线模板指向挂载路径（禁联网更新；模板由 /opt/kb 运行时挂载）----------
+RUN printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/nuclei-templates' \
+      > /home/kali/.config/nuclei/config.yaml
 
-# ---------- 12. agent-browser（渲染走 apt chromium，已弃用 Chrome for Testing）----------
-RUN sudo npm install -g agent-browser
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-    DISPLAY=:99
-
-# ---------- 13. agent-browser skill（非标准 CLI，失败不阻断构建）----------
-RUN npx skills add vercel-labs/agent-browser --skill agent-browser -g -y \
-    || echo "[warn] agent-browser skill 不可用/失败，已跳过（不影响 agent-browser 本体）"
-
-# ---------- 14. shell 提示 + 默认工作区 git 配置 ----------
+# ---------- 9. shell 提示 + gdb 自动加载 + git 身份 + 登录 shell 的 java PATH ----------
+# Kali 的 ~/.profile 不 source ~/.bashrc，登录 shell（bash -l）会被 /etc/profile 重写 PATH
+# 丢掉 sdkman java——补 source sdkman-init，使 bash -lc 下 java 同样可用
 RUN printf '%s\n' 'PS1="${PS1%\\n*} \[\033[0;36m\]\D{%y-%m-%d} - \t\[\033[;32m\]\n${PS1##*\\n}"' >> /home/kali/.bashrc && \
     echo 'set auto-load safe-path /' >> /home/kali/.gdbinit && \
-    git -C /home/kali/workspace init && \
-    git -C /home/kali/workspace config user.email "agent@mirrorstrike" && \
-    git -C /home/kali/workspace config user.name "mirrorstrike-agent"
+    echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /home/kali/.profile && \
+    git config --global user.email "agent@mirrorstrike" && \
+    git config --global user.name "mirrorstrike-agent"
 
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-# ---------- 15. Claude Code MCP 预配置（Playwright MCP + agent-browser 统一走 apt chromium）----------
-RUN claude mcp add playwright --scope user -- playwright-mcp --browser chromium --executable-path /usr/bin/chromium --allow-unrestricted-file-access --headless || \
-    echo "[warn] MCP 配置失败，可手动运行: claude mcp add playwright --scope user -- playwright-mcp --browser chromium --executable-path /usr/bin/chromium --allow-unrestricted-file-access --headless"
-
-# ---------- 16. 清理 + entrypoint（常驻 Xvfb，解决 DISPLAY=:99 无服务）----------
-RUN sudo rm -rf /usr/lib/llvm-*/build 2>/dev/null || true
-RUN sudo tee /usr/local/bin/docker-entrypoint.sh > /dev/null <<'EOF'
-#!/bin/sh
-if command -v Xvfb >/dev/null 2>&1 && [ -n "$DISPLAY" ]; then
-  # 清理可能残留的锁文件（容器重建或异常退出后遗留）
-  lockfile="/tmp/.${DISPLAY#*:}-lock"
-  [ -f "$lockfile" ] && rm -f "$lockfile"
-  Xvfb "$DISPLAY" -screen 0 1280x800x24 -ac >/tmp/xvfb.log 2>&1 &
-  # 等待 Xvfb 就绪（最多 2 秒）
-  for i in 1 2 3 4; do
-    xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break
-    sleep 0.5
-  done
-fi
-exec "$@"
-EOF
-RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# 默认工作目录保持中立：Agent 进程的实际 cwd 由 wrapper 按执行器设置
-# （claude → claude-code，pi → pi-agent），WORKDIR 仅影响 docker run/exec 的默认 shell 位置
+# 默认工作目录保持中立：Agent 进程的实际 cwd 由 wrapper 设置（pi → /opt/mirrorstrike/pi-agent），
+# WORKDIR 仅影响 docker run/exec 的默认 shell 位置。
+# 无 ENTRYPOINT：平台 Worker 统一以 --entrypoint tail -f /dev/null 常驻容器，
+# Agent 进程经 docker exec 拉起；有头浏览器等 GUI 需求用 xvfb-run 手动起虚拟显示。
 WORKDIR /opt/mirrorstrike
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]
