@@ -8,11 +8,15 @@
 # 方案：mirrorstrike 仓库 docs/tsecbench-hosted-mode-refactor-plan.md §4.5
 # 与兄弟 Dockerfile / Dockerfile.pentest 的关键差异：
 #   - 弃用 kali-linux-headless 元包（含 metasploit 全家，参考镜像 16.8GB 主因），
-#     改显式最小清单：渗透 + CTF + Pwn，无审计类（semgrep/gitleaks/trivy）
+#     改显式最小清单：渗透 + CTF + Pwn + 逆向兜底（r2/yara），审计保留 gitleaks
 #   - 无任何 GitHub 下载工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
 #     jwt_tool/jdwp-shellifier/pwndbg 全部取消）；nuclei/naabu 用 Kali 源版本
-#   - npm 全局仅 @earendil-works/pi-coding-agent（+ 可选 playwright 层），
+#   - npm 全局仅 @earendil-works/pi-coding-agent（+ playwright 默认层：chromium
+#     无头浏览器，经 mcp.json --executable-path /usr/bin/chromium 接线），
 #     无 claude-code / codex / agent-browser
+#   - agent 刚需补装：git / openssh-client / iputils-ping / tmux / strace
+#     （coding agent、ssh 类利用、连通性与常驻隧道）、数据库客户端
+#     mysql（redis-cli 已随 redis-server→redis-tools 依赖带入，不装 server）
 #   - 单 JDK8（SDKMAN zulu，gsl5/mdut/JNDIExploit/ysoserial 反射链需 8）
 #   - 直接 root 运行（all-in-one 需 root 跑 PG；Agent 无容器边界）
 #   - 携带容器运行时：PostgreSQL / Redis / tini（entrypoint 自举三件套+调度器）
@@ -32,8 +36,9 @@ FROM --platform=amd64 kalilinux/kali-rolling:latest
 
 # ---------- 版本号集中管理（改版本只动这里）----------
 ARG JDK8=8.0.482.fx-zulu
-# 可选浏览器层：WITH_PLAYWRIGHT=1 时安装 chromium + playwright npm（web 类 CTF 渲染）
-ARG WITH_PLAYWRIGHT=0
+# 浏览器层默认开启：chromium + playwright npm（web 类 CTF 渲染/SPA 测试刚需；
+# 体积敏感的离线构建可 --build-arg WITH_PLAYWRIGHT=0 关闭）
+ARG WITH_PLAYWRIGHT=1
 
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
@@ -52,21 +57,25 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 # seclists(全套 1.8GB) / dirb(quick|common 字典) / wordlists(rockyou) / dnsrecon(DNS 枚举字典)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      bsdextrautils npm jq yq curl wget ca-certificates tini procps iproute2 \
+      bsdextrautils npm jq yq curl wget ca-certificates git tini \
+      openssh-client iputils-ping tmux strace procps iproute2 \
       postgresql redis-server \
-      nmap masscan nuclei naabu sqlmap gobuster ffuf \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
       seclists dirb dnsrecon wordlists \
-      hydra john \
+      hydra john gitleaks \
+      default-mysql-client \
       python3-impacket evil-winrm netexec smbclient \
-      enum4linux-ng bloodyad proxychains4 sshpass chisel-common-binaries \
+      enum4linux-ng bloodyad coercer proxychains4 sshpass chisel-common-binaries \
       netcat-openbsd socat tcpdump tshark dnsutils whois \
-      gdb gdb-multiarch binwalk foremost steghide exiftool \
+      gdb gdb-multiarch radare2 yara binwalk foremost steghide exiftool \
       unzip p7zip-full unrar-free xz-utils patchelf \
       qemu-user qemu-user-static libc6-dbg libc6-dev \
       python3 python3-pip python3-venv \
       ruby sudo less vim-tiny file && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+# 数据库客户端说明：mysql 走 default-mysql-client（仅客户端，无 server）；
+# redis-cli 已随 redis-server 的 redis-tools 依赖带入（hosted 自带 Redis 实例）
 
 # ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 不装）----------
 # Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在
@@ -105,6 +114,11 @@ RUN curl -s "https://get.sdkman.io" | bash && \
               sdk install java ${JDK8} && \
               sdk default java ${JDK8}' && \
     rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
+# 登录 shell（bash -l）会被 /etc/profile 重写 PATH 丢掉 java——补 source sdkman-init；
+# git 全局身份避免 agent 仓库分析时 commit 因身份缺失被拒
+RUN echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /root/.profile && \
+    git config --global user.email "agent@mirrorstrike" && \
+    git config --global user.name "mirrorstrike-agent"
 ENV JAVA_HOME=/root/.sdkman/candidates/java/current
 ENV PATH=/root/.sdkman/candidates/java/current/bin:${PATH}
 
