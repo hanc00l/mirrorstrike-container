@@ -6,7 +6,7 @@
 # Dockerfile.tsec-hosted — tsecbench 托管模式 all-in-one 单镜像
 #
 # 方案：mirrorstrike 仓库 docs/tsecbench-hosted-mode-refactor-plan.md §4.5
-# 与兄弟 Dockerfile / Dockerfile.pentest 的关键差异：
+# 与兄弟 Dockerfile（完整版）的关键差异：
 #   - 弃用 kali-linux-headless 元包（含 metasploit 全家，参考镜像 16.8GB 主因），
 #     改显式最小清单：渗透 + CTF + Pwn + 逆向兜底（r2/yara），审计保留 gitleaks
 #   - 无任何 GitHub 下载工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
@@ -44,6 +44,7 @@ ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     MIRRORSTRIKE_RUN_MODE=hosted \
     NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
 
@@ -106,7 +107,6 @@ RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
       apt-get clean && rm -rf /var/lib/apt/lists/* && \
       npm install -g playwright @playwright/mcp; \
     fi
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # ---------- 6. SDKMAN JDK8（单 JDK：反序列化利用链对新 JDK 兼容差）----------
 RUN curl -s "https://get.sdkman.io" | bash && \

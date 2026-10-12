@@ -1,26 +1,24 @@
 # mirrorstrike-container
 
-MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景。已按 `Dockerfile.tsec-hosted` 的思路完成精简重构：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级自研/敏感工具与 nuclei 模板全部改为运行时挂载（`/opt/tools`、`/opt/kb` 等）。
+MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级自研/敏感工具与 nuclei 模板经运行时挂载（`/opt/tools`、`/opt/kb` 等）提供。
 
 ## 项目结构
 
 ```
 .
 ├── container/
-│   ├── Dockerfile               # 完整版（四场景，pi-only 精简版）构建文件
-│   ├── Dockerfile.pentest       # 轻量渗透测试版构建文件（旧变体，未随精简重构更新）
+│   ├── Dockerfile               # 完整版（四场景，pi-only）构建文件
 │   └── Dockerfile.tsec-hosted   # tsecbench 托管 all-in-one 单镜像（含 PG/Redis server 端）
 ├── .github/
 │   └── workflows/
-│       └── docker-build.yml     # 自动化构建与推送工作流（完整版 + 渗透版）
-├── CLAUDE.md
+│       └── docker-build.yml     # 自动化构建与推送工作流（完整版）
+├── AGENTS.md
 └── README.md
 ```
 
 ## 镜像变体
 
-- **完整版**（`container/Dockerfile`）：四场景精简清单，~6.5 GB（未压缩，seclists 字典 ~1.9GB 为主；旧完整版 16.8GB）
-- **渗透版**（`container/Dockerfile.pentest`）：纯渗透测试 + AI 代理 + 浏览器，~2-3 GB（旧变体）
+- **完整版**（`container/Dockerfile`）：四场景显式最小清单，~6.5 GB（未压缩，seclists 字典 ~1.9GB 为主）
 - **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：tsecbench 托管模式 all-in-one（内置 PG/Redis，直接 root 运行），含 chromium 默认层与 agent 刚需工具（git/tmux/r2/yara/feroxbuster/coercer/gitleaks/mysql 客户端），压缩后 ~2.6GB（<3GB 预算），仅用于托管仿真环境
 
 ## 任务场景与工具
@@ -35,7 +33,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 ## 关键约定（修改 Dockerfile 必读）
 
 - **运行时挂载点**: `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/deepstrike`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools/deepstrike 只读），**Dockerfile 中不可往里装任何工具**，仅建占位目录并 chown 给 kali。
-- **零 GitHub 下载**: 镜像构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均已移除）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新）。
+- **零 GitHub 下载**: 镜像构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新）。
 - **JDK 策略**: 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差；ghidra 等 JDK21 工具不在本镜像。
 - **sudo 免密**: 运行用户 kali(uid 1000) 带 `NOPASSWD:ALL` sudo——平台高安全档（`docker_profile=security`）以镜像默认用户运行，低权限工具链依赖 sudo 提权。
 - **无 server 端组件**: 不装 postgresql/redis-server/tini 等；PG/Redis 由平台侧提供，容器常驻由 Worker `docker run --init --entrypoint tail -f /dev/null` 实现。
@@ -49,7 +47,6 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像至 `ghcr.io/hanc00l/mirrorstrike-container`：
 - `latest`（完整版）
-- `latest-pentest`（渗透版）
 
 ## 参考
 

@@ -1,13 +1,12 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景。已按 `Dockerfile.tsec-hosted` 的思路完成精简重构：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
 
 ## 镜像变体
 
 | 变体 | 标签 | 用途 | 大小（估算）|
 |------|------|------|------------|
-| **完整版** | `latest` | 四场景精简清单（渗透 + CTF + 审计 + Pwn）| ~6.5 GB（旧完整版 16.8GB）|
-| **渗透版** | `latest-pentest` | 纯渗透测试 + AI 代理 + 浏览器自动化（旧变体）| ~2-3 GB |
+| **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~6.5 GB（未压缩，seclists 字典为主）|
 | **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis），仅用于托管仿真环境 | - |
 
 ## 快速开始
@@ -16,24 +15,18 @@
 # 完整版
 docker pull ghcr.io/hanc00l/mirrorstrike-container:latest
 docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
-
-# 轻量渗透版
-docker pull ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
-docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest-pentest
 ```
 
-## 精简重构说明（完整版）
+## 设计要点（完整版）
 
-参考 `container/Dockerfile.tsec-hosted` 的显式最小清单重构：
-
-| 变更 | 说明 |
+| 要点 | 说明 |
 |------|------|
-| 弃用 kali-linux-headless 元包 | 移除 metasploit 全家（旧镜像体积主因），改显式最小清单 |
-| 零 GitHub 下载 | katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 全部移除；nuclei/naabu 用 Kali 源版本 |
-| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底），移除 claude-code / agent-browser |
+| 显式最小 apt 清单 | 无元包、无 metasploit，按四场景显式列出工具 |
+| 零 GitHub 下载 | 构建期无任何 GitHub release / git clone 依赖；nuclei/naabu 用 Kali 源版本 |
+| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底）|
 | 单 JDK8 | SDKMAN Zulu；ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
 | playwright 默认内置 | apt chromium + npm playwright/@playwright/mcp，经平台 `mcp/mcp.json`（`--executable-path /usr/bin/chromium`）接线 |
-| 保留 sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
+| sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
 | 无 server 端组件 | 不装 postgresql/redis-server/tini；PG/Redis 由平台侧提供 |
 | /opt 全挂载 | `tools`/`kb`/`workspace`/`deepstrike`/`traffic` 仅建占位目录，运行时 `-v` 注入 |
 
@@ -88,9 +81,6 @@ pi 扩展经 `pi-agent/extensions/mirrorstrike-mcp.ts` 注册 MCP 工具；镜�
 ```bash
 # 完整版
 docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest container/
-
-# 渗透版
-docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest-pentest -f container/Dockerfile.pentest container/
 ```
 
 > CI（GitHub Actions，国外网络）可直接构建。**国内本地构建**较慢且 `auth.docker.io` 易被 DNS 污染，需配置代理并预拉基础镜像，例如：
@@ -98,9 +88,8 @@ docker build -t ghcr.io/hanc00l/mirrorstrike-container:latest-pentest -f contain
 
 ## 自动化构建
 
-推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送两个镜像：
+推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像：
 - `ghcr.io/hanc00l/mirrorstrike-container:latest`（完整版）
-- `ghcr.io/hanc00l/mirrorstrike-container:latest-pentest`（渗透版）
 
 ## 参考
 
