@@ -15,8 +15,11 @@
 #     无头浏览器，经 mcp.json --executable-path /usr/bin/chromium 接线），
 #     无 claude-code / codex / agent-browser
 #   - agent 刚需补装：git / openssh-client / iputils-ping / tmux / strace
-#     （coding agent、ssh 类利用、连通性与常驻隧道）、数据库客户端
-#     mysql（redis-cli 已随 redis-server→redis-tools 依赖带入，不装 server）
+#     （coding agent、ssh 类利用、连通性与常驻隧道）、二进制分析最小集
+#     binutils / xxd / ltrace / gcc（round15 hosted 实证 agent 调 strings/xxd
+#     失败；对齐 pi-slim 主清单与 skills「PATH 实测」承诺）、python3-paramiko
+#     （SSH 脚本化）、数据库客户端 mysql（redis-cli 已随 redis-server→redis-tools
+#     依赖带入，不装 server；semgrep 仍不装——tsec 场景映射无 code-audit）
 #   - 单 JDK8（SDKMAN zulu，gsl5/mdut/JNDIExploit/ysoserial 反射链需 8）
 #   - 直接 root 运行（all-in-one 需 root 跑 PG；Agent 无容器边界）
 #   - 携带容器运行时：PostgreSQL / Redis / tini（entrypoint 自举三件套+调度器）
@@ -68,11 +71,11 @@ RUN apt-get update && \
       python3-impacket evil-winrm netexec smbclient \
       enum4linux-ng bloodyad coercer proxychains4 sshpass chisel-common-binaries \
       netcat-openbsd socat tcpdump tshark dnsutils whois \
-      gdb gdb-multiarch radare2 yara binwalk foremost steghide exiftool \
+      gdb gdb-multiarch radare2 yara ltrace binutils xxd binwalk foremost steghide exiftool \
       unzip p7zip-full unrar-free xz-utils patchelf \
       qemu-user qemu-user-static libc6-dbg libc6-dev \
-      python3 python3-pip python3-venv \
-      ruby sudo less vim-tiny file && \
+      python3 python3-pip python3-venv python3-paramiko \
+      gcc ruby sudo less vim-tiny file && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 # 数据库客户端说明：mysql 走 default-mysql-client（仅客户端，无 server）；

@@ -19,7 +19,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 ## 镜像变体
 
 - **完整版**（`container/Dockerfile`）：四场景显式最小清单，~6.5 GB（未压缩，seclists 字典 ~1.9GB 为主）
-- **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：tsecbench 托管模式 all-in-one（内置 PG/Redis，直接 root 运行），含 chromium 默认层与 agent 刚需工具（git/tmux/r2/yara/feroxbuster/coercer/gitleaks/mysql 客户端），压缩后 ~2.6GB（<3GB 预算），仅用于托管仿真环境
+- **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：tsecbench 托管模式 all-in-one（内置 PG/Redis，直接 root 运行），含 chromium 默认层与 agent 刚需工具（git/tmux/r2/yara/feroxbuster/coercer/gitleaks/mysql 客户端/binutils/xxd/ltrace/gcc/paramiko），压缩后 ~2.77GB（<3GB 预算，2026-10-12 实测），仅用于托管仿真环境
 
 ## 任务场景与工具
 
