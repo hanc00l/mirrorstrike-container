@@ -10,7 +10,9 @@
 #     nuclei 模板均经运行时挂载提供（/opt/tools、/opt/kb，:ro）
 #   - AI 执行器仅 pi-coding-agent（+ MCP SDK 解析兜底），无 claude-code/agent-browser
 #   - 交互 java 仅 JDK8（SDKMAN zulu）；jadx/apktool 为 Kali apt 版（依赖链带入
-#     依赖链带入 JVM25（Kali default-jre，当前 openjdk-25）仅供二者运行，sdkman PATH 前置保证默认 java 仍为 JDK8）；ghidra 等
+#     JVM25（Kali default-jre，当前 openjdk-25）仅供二者运行；jadx 类文件为 Java 11+，
+#     经 2b 节 /usr/local/bin wrapper 显式绑定 apt JVM，否则吃 sdkman JDK8 即崩；
+#     交互默认 java 仍为 JDK8）；ghidra 等
 #     JDK21 工具由 reverse 专用镜像（mirrorstrike deploy/reverse-static）承载，
 #     agent 容器内以 radare2/gdb 兜底
 #   - playwright 为默认能力：apt chromium + npm playwright/@playwright/mcp
@@ -76,6 +78,21 @@ RUN apt-get update && \
       chromium xvfb libgtk-3-0 libgbm1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# ---------- 2b. jadx JVM 绑定（apt 路线配套）----------
+# jadx 1.5.6 类文件为 Java 11+（class 55），而交互默认 java 是第 7 节 sdkman JDK8
+# （class 52）——PATH 命中即崩（UnsupportedClassVersionError）。与 tsec-hosted
+# 「每工具显式 JAVA_HOME」同型：/usr/local/bin wrapper 把 jadx 固定到 apt 依赖带入的
+# JVM25，默认 java 仍为 JDK8；apktool 2.7 类文件兼容 Java 8，无需绑定。
+RUN set -eux; \
+    jvm_home="$(dirname "$(dirname "$(readlink -f /usr/bin/java)")")"; \
+    printf '%s\n' '#!/bin/sh' \
+      '# jadx 类文件为 Java 11+：显式走 apt JVM（交互默认 java 仍为 sdkman JDK8）' \
+      "export JAVA_HOME=${jvm_home}" \
+      'export PATH="${JAVA_HOME}/bin:${PATH}"' \
+      'exec /usr/bin/jadx "$@"' > /usr/local/bin/jadx; \
+    chmod 0755 /usr/local/bin/jadx; \
+    /usr/local/bin/jadx --version
 
 # ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 在第 5 层以 pip --user 安装）----------
 # Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在 Python 3.14 下
