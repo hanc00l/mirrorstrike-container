@@ -6,11 +6,14 @@
 # Dockerfile.tsec-hosted — tsecbench 托管模式 all-in-one 单镜像
 #
 # 方案：mirrorstrike 仓库 docs/tsecbench-hosted-mode-refactor-plan.md §4.5
+# 工具面补全：docs/tsecbench-1012-hosted-round1-remediation-plan.md R1
 # 与兄弟 Dockerfile（完整版）的关键差异：
 #   - 弃用 kali-linux-headless 元包（含 metasploit 全家，参考镜像 16.8GB 主因），
 #     改显式最小清单：渗透 + CTF + Pwn + 逆向兜底（r2/yara），审计保留 gitleaks
-#   - 无任何 GitHub 下载工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
-#     jwt_tool/jdwp-shellifier/pwndbg 全部取消）；nuclei/naabu 用 Kali 源版本
+#   - GitHub 下载仅限 R1 锁定资产（jadx/apktool/capa/temurin-jdk21：
+#     URL+SHA256 复用 deploy/reverse-static/tool-lock.json 锁定值，构建时校验）；
+#     其余历史 GitHub 工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
+#     jwt_tool/jdwp-shellifier/pwndbg）仍全部取消；nuclei/naabu 用 Kali 源版本
 #   - npm 全局仅 @earendil-works/pi-coding-agent（+ playwright 默认层：chromium
 #     无头浏览器，经 mcp.json --executable-path /usr/bin/chromium 接线），
 #     无 claude-code / codex / agent-browser
@@ -20,7 +23,15 @@
 #     失败；对齐 pi-slim 主清单与 skills「PATH 实测」承诺）、python3-paramiko
 #     （SSH 脚本化）、数据库客户端 mysql（redis-cli 已随 redis-server→redis-tools
 #     依赖带入，不装 server；semgrep 仍不装——tsec 场景映射无 code-audit）
+#   - 密码类补全（R1-T1）：hashid（hash 指纹识别）/ fcrackzip（加密 zip）；
+#     john 已含 zip2john/rar2john 脚本族，hashcat 不装（CPU OpenCL 依赖重）
 #   - 单 JDK8（SDKMAN zulu，gsl5/mdut/JNDIExploit/ysoserial 反射链需 8）
+#     + Android 专用裁剪 JRE（R1-T2，jlink 自锁定 Temurin 21 裁剪——jadx/apktool
+#     要求 JDK≥11，lock 中已锁定 21 的 URL+SHA256，未引入无哈希校验的 17 下载；
+#     双 JAVA_HOME 经 wrapper 脚本隔离，默认 java 恒为 JDK8）
+#   - ghidra 明确不装（2026-10-13 评审决策：空间占用，导出门禁余量 ~200MB vs
+#     解压 ~1GB）：ELF 反编译降级路径 = r2 伪码（pdc）+ gdb + 字符串/头部分析
+#     （写入 skills 文本向 agent 明示）
 #   - 直接 root 运行（all-in-one 需 root 跑 PG；Agent 无容器边界）
 #   - 携带容器运行时：PostgreSQL / Redis / tini（entrypoint 自举三件套+调度器）
 #   - Go 二进制由构建编排方（mirrorstrike deploy/hosted/build-image.sh）宿主机编译后
@@ -43,12 +54,23 @@ ARG JDK8=8.0.482.fx-zulu
 # 体积敏感的离线构建可 --build-arg WITH_PLAYWRIGHT=0 关闭）
 ARG WITH_PLAYWRIGHT=1
 
+# R1 锁定资产（URL+SHA256 与 mirrorstrike deploy/reverse-static/tool-lock.json 一致；
+# 构建期 sha256sum -c 校验，升级须同步更新 lock 并重评体积）
+ARG ANDROID_JDK_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
+ARG ANDROID_JDK_SHA256=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
+ARG JADX_URL=https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar
+ARG APKTOOL_SHA256=eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd
+ARG CAPA_URL=https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip
+ARG CAPA_SHA256=07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4
+
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    MIRRORSTRIKE_RUN_MODE=hosted \
+    MS_RUN_MODE=hosted \
     NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
 
 # ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror）----------
@@ -66,7 +88,7 @@ RUN apt-get update && \
       postgresql redis-server \
       nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
       seclists dirb dnsrecon wordlists \
-      hydra john gitleaks \
+      hydra john hashid fcrackzip gitleaks \
       default-mysql-client \
       python3-impacket evil-winrm netexec smbclient \
       enum4linux-ng bloodyad coercer proxychains4 sshpass chisel-common-binaries \
@@ -124,6 +146,58 @@ RUN echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /root/.profile && \
     git config --global user.name "mirrorstrike-agent"
 ENV JAVA_HOME=/root/.sdkman/candidates/java/current
 ENV PATH=/root/.sdkman/candidates/java/current/bin:${PATH}
+
+# ---------- 6b. Android 逆向层（R1-T2）：jadx + apktool + jlink 裁剪 JRE ----------
+# jadx/apktool 要求 JDK>=11；默认 JDK8（反射链刚需）不动，android 工具经 wrapper
+# 显式指向 /opt/tools/android/jre，双 JAVA_HOME 互不污染。
+# JRE 用 jlink 按 jadx/apktool 依赖裁剪（jdeps 动态计算，失败回退固定模块集），
+# 体积远小于整装 JDK；构建用 Temurin 21（tool-lock 已锁 URL+SHA256）。
+RUN set -eux; \
+    mkdir -p /tmp/android-build /opt/tools/android; \
+    curl -fsSL -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
+    echo "${ANDROID_JDK_SHA256}  /tmp/jdk21.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/jdk21.tar.gz -C /tmp/android-build; \
+    curl -fsSL -o /tmp/jadx.zip "${JADX_URL}"; \
+    echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c -; \
+    unzip -q /tmp/jadx.zip -d /opt/tools/android/jadx; \
+    curl -fsSL -o /opt/tools/android/apktool.jar "${APKTOOL_URL}"; \
+    echo "${APKTOOL_SHA256}  /opt/tools/android/apktool.jar" | sha256sum -c -; \
+    jdk21_dir="$(find /tmp/android-build -maxdepth 1 -type d -name 'jdk-21*' | head -1)"; \
+    mods="$("${jdk21_dir}/bin/jdeps" --print-module-deps --ignore-missing-deps \
+      /opt/tools/android/jadx/lib/*.jar /opt/tools/android/apktool.jar 2>/dev/null || true)"; \
+    if [ -z "${mods}" ]; then \
+      mods="java.base,java.logging,java.xml,java.naming,java.desktop,java.management,java.sql,java.net.http,jdk.unsupported,jdk.crypto.ec,jdk.zipfs"; \
+    fi; \
+    echo "android JRE modules: ${mods}"; \
+    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-footer \
+      --compress zip-6 --output /opt/tools/android/jre; \
+    rm -rf /tmp/jdk21.tar.gz /tmp/jadx.zip /tmp/android-build; \
+    printf '%s\n' '#!/bin/sh' \
+      '# R1-T2：android 工具显式指向裁剪 JRE（默认 java 仍为 JDK8，互不污染）' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'export PATH="/opt/tools/android/jre/bin:${PATH}"' \
+      'exec /opt/tools/android/jadx/bin/jadx "$@"' > /usr/local/bin/jadx; \
+    printf '%s\n' '#!/bin/sh' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'exec /opt/tools/android/jre/bin/java -jar /opt/tools/android/apktool.jar "$@"' > /usr/local/bin/apktool; \
+    chmod 0755 /usr/local/bin/jadx /usr/local/bin/apktool; \
+    /usr/local/bin/jadx --version; \
+    /usr/local/bin/apktool --version
+
+# ---------- 6c. capa（R1-T3）：恶意软件能力识别单二进制 + 离线规则 ----------
+# 规则文件随镜像（禁联网更新，对齐 nuclei 模板处理方式）；capa 默认在二进制
+# 同级 rules/ 目录找规则。ELF 能力分析补充 r2/gdb 之外的语义层结论。
+RUN set -eux; \
+    mkdir -p /opt/tools/capa; \
+    curl -fsSL -o /tmp/capa.zip "${CAPA_URL}"; \
+    echo "${CAPA_SHA256}  /tmp/capa.zip" | sha256sum -c -; \
+    unzip -q /tmp/capa.zip -d /tmp/capa-unpack; \
+    capa_bin="$(find /tmp/capa-unpack -type f -name capa | head -1)"; \
+    install -m 0755 "${capa_bin}" /opt/tools/capa/capa; \
+    ln -sf /opt/tools/capa/capa /usr/local/bin/capa; \
+    git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/tools/capa/rules; \
+    rm -rf /opt/tools/capa/rules/.git /tmp/capa.zip /tmp/capa-unpack; \
+    capa --version
 
 # ---------- 7. nuclei 离线模板指向镜像内路径（禁联网更新）----------
 RUN mkdir -p /root/.config/nuclei && \
