@@ -10,7 +10,7 @@
 #     nuclei 模板均经运行时挂载提供（/opt/tools、/opt/kb，:ro）
 #   - AI 执行器仅 pi-coding-agent（+ MCP SDK 解析兜底），无 claude-code/agent-browser
 #   - 交互 java 仅 JDK8（SDKMAN zulu）；jadx/apktool 为 Kali apt 版（依赖链带入
-#     JVM21 仅供二者运行，sdkman PATH 前置保证默认 java 仍为 JDK8）；ghidra 等
+#     依赖链带入 JVM25（Kali default-jre，当前 openjdk-25）仅供二者运行，sdkman PATH 前置保证默认 java 仍为 JDK8）；ghidra 等
 #     JDK21 工具由 reverse 专用镜像（mirrorstrike deploy/reverse-static）承载，
 #     agent 容器内以 radare2/gdb 兜底
 #   - playwright 为默认能力：apt chromium + npm playwright/@playwright/mcp
@@ -49,7 +49,7 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #   feroxbuster / coercer / gitleaks — 枚举纪律 / 域渗透 / 审计的技能硬承诺
 #   hashid / fcrackzip — 密码小件（R1-T1，对齐 tsec-hosted）；default-mysql-client —
 #     数据库利用客户端（R1 对齐）
-#   jadx / apktool — Android 逆向（R1-T2 对齐，Kali apt 版；依赖链带入 JVM21 仅供
+#   jadx / apktool — Android 逆向（R1-T2 对齐，Kali apt 版；依赖链带入 JVM25（Kali default-jre，当前 openjdk-25）仅供
 #     二者运行，交互默认 java 仍为第 7 节 sdkman JDK8——sdkman PATH 前置，
 #     apt 的 update-alternatives 不影响 sdkman 路径）
 #   chromium 栈 — playwright 浏览器；xvfb 供有头场景 xvfb-run 兜底
