@@ -23,10 +23,10 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 ## 任务场景与工具
 
-- **渗透测试**: nmap, masscan, nuclei, naabu, sqlmap, gobuster, ffuf, feroxbuster, netexec, coercer, bloodyad, enum4linux-ng, evil-winrm, impacket, smbclient, hydra, john, proxychains4, sshpass, chisel（fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 等经 `/opt/tools` 挂载提供）
-- **CTF**: pwntools, ROPgadget, one_gadget, pycryptodome, z3-solver, binwalk, foremost, steghide, exiftool
+- **渗透测试**: nmap, masscan, nuclei, naabu, sqlmap, gobuster, ffuf, feroxbuster, netexec, coercer, bloodyad, enum4linux-ng, evil-winrm, impacket, smbclient, hydra, john, proxychains4, sshpass, chisel, default-mysql-client（fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 等经 `/opt/tools` 挂载提供）
+- **CTF**: pwntools, ROPgadget, one_gadget, pycryptodome, z3-solver, binwalk, foremost, steghide, exiftool, hashid, fcrackzip
 - **代码审计**: semgrep（`~/.local/bin`）, gitleaks, nuclei
-- **Pwn / 逆向**: gdb + gdb-multiarch, strace, radare2, yara, patchelf, qemu-user / qemu-user-static, ROPgadget, one_gadget, libc6-dbg（ghidra 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载）
+- **Pwn / 逆向**: gdb + gdb-multiarch, strace, radare2, yara, patchelf, qemu-user / qemu-user-static, ROPgadget, one_gadget, libc6-dbg, jadx, apktool（均 Kali apt 版；ghidra 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载）
 - **AI 代理**: 仅 `@earendil-works/pi-coding-agent`（+ `@modelcontextprotocol/sdk` 解析兜底）
 - **浏览器自动化**: playwright + @playwright/mcp（浏览器走 apt chromium，无头；平台 `mcp/mcp.json` 以 `--executable-path /usr/bin/chromium` 接线；有头场景用 `xvfb-run` 兜底）
 
@@ -34,7 +34,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 - **运行时挂载点**: `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/deepstrike`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools/deepstrike 只读），**Dockerfile 中不可往里装任何工具**，仅建占位目录并 chown 给 kali。
 - **零 GitHub 下载**: 镜像构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新）。
-- **JDK 策略**: 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差；ghidra 等 JDK21 工具不在本镜像。
+- **JDK 策略**: 交互 java 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差。jadx/apktool 为 Kali apt 版，依赖链带入的 JVM21 仅供二者运行，sdkman PATH 前置保证 `java` 默认仍为 JDK8；ghidra 等 JDK21 工具不在本镜像。
 - **sudo 免密**: 运行用户 kali(uid 1000) 带 `NOPASSWD:ALL` sudo——平台高安全档（`docker_profile=security`）以镜像默认用户运行，低权限工具链依赖 sudo 提权。
 - **无 server 端组件**: 不装 postgresql/redis-server/tini 等；PG/Redis 由平台侧提供，容器常驻由 Worker `docker run --init --entrypoint tail -f /dev/null` 实现。
 - **无 ENTRYPOINT**: 镜像只留 `CMD ["/bin/bash"]`；平台 Worker 统一覆盖 entrypoint 常驻容器、经 `docker exec` 拉起 Agent。

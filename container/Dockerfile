@@ -9,8 +9,10 @@
 #     用 Kali 源版本。ysoserial/JNDIExploit/suo5/frp/fscan 等自研/敏感工具与
 #     nuclei 模板均经运行时挂载提供（/opt/tools、/opt/kb，:ro）
 #   - AI 执行器仅 pi-coding-agent（+ MCP SDK 解析兜底），无 claude-code/agent-browser
-#   - Java 仅 JDK8（SDKMAN zulu）；ghidra 等 JDK21 工具由 reverse 专用镜像
-#     （mirrorstrike deploy/reverse-static）承载，agent 容器内以 radare2/gdb 兜底
+#   - 交互 java 仅 JDK8（SDKMAN zulu）；jadx/apktool 为 Kali apt 版（依赖链带入
+#     JVM21 仅供二者运行，sdkman PATH 前置保证默认 java 仍为 JDK8）；ghidra 等
+#     JDK21 工具由 reverse 专用镜像（mirrorstrike deploy/reverse-static）承载，
+#     agent 容器内以 radare2/gdb 兜底
 #   - playwright 为默认能力：apt chromium + npm playwright/@playwright/mcp
 #     （平台 mcp/mcp.json 以 --executable-path /usr/bin/chromium 接线，无头运行）
 #   - 保留 kali 用户 + sudo 免密（docker_profile=security 高安全档以镜像默认用户运行）
@@ -45,6 +47,11 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #   radare2 / yara — 逆向/pwn 容器内主力（ghidra 随 JDK21 一并移除，正式逆向管线走
 #     reverse 专用镜像 run_reverse_tool），且 r2 为技能承诺
 #   feroxbuster / coercer / gitleaks — 枚举纪律 / 域渗透 / 审计的技能硬承诺
+#   hashid / fcrackzip — 密码小件（R1-T1，对齐 tsec-hosted）；default-mysql-client —
+#     数据库利用客户端（R1 对齐）
+#   jadx / apktool — Android 逆向（R1-T2 对齐，Kali apt 版；依赖链带入 JVM21 仅供
+#     二者运行，交互默认 java 仍为第 7 节 sdkman JDK8——sdkman PATH 前置，
+#     apt 的 update-alternatives 不影响 sdkman 路径）
 #   chromium 栈 — playwright 浏览器；xvfb 供有头场景 xvfb-run 兜底
 # 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
 # /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包。
@@ -56,11 +63,11 @@ RUN apt-get update && \
       openssh-client sshpass netcat-openbsd socat tcpdump tshark dnsutils whois proxychains4 \
       nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
       seclists dirb dnsrecon wordlists \
-      hydra john gitleaks \
+      hydra john hashid fcrackzip gitleaks \
       python3-impacket evil-winrm netexec smbclient enum4linux-ng bloodyad coercer \
-      chisel-common-binaries \
+      chisel-common-binaries default-mysql-client \
       gdb gdb-multiarch strace ltrace binutils xxd binwalk foremost steghide exiftool \
-      radare2 yara \
+      radare2 yara jadx apktool \
       unzip p7zip-full unrar-free xz-utils patchelf \
       qemu-user qemu-user-static libc6-dbg libc6-dev \
       python3 python3-pip python3-venv python3-paramiko \
