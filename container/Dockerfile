@@ -145,11 +145,16 @@ RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if
     pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
 
 # ---------- 7. SDKMAN JDK8（单 JDK：反序列化利用链对新 JDK 兼容差；单引号 + ${JDK8} 文本替换避免 $HOME 被误展开）----------
-RUN curl -s "https://get.sdkman.io" | bash && \
+# curl 带 --retry：sdkman 域名（get/cdn）直连与代理路线均偶发抖动，安装器管道
+# 模式（curl | bash）会静默吞掉失败导致 sdkman-init 缺失——改落盘 + fail-fast。
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      "https://get.sdkman.io" -o /tmp/sdkman-install.sh; \
+    bash /tmp/sdkman-install.sh; \
     bash -lc 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
               sdk install java ${JDK8} && \
-              sdk default java ${JDK8}' && \
-    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
+              sdk default java ${JDK8}'; \
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/* /tmp/sdkman-install.sh
 # 默认 JDK8：设 ENV 让非交互 shell / agent 调用也走 JDK8（sdkman 仅在交互 ~/.bashrc 生效）
 ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
 ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:${PATH}
