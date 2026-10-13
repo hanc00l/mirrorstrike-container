@@ -169,7 +169,7 @@ RUN set -eux; \
       mods="java.base,java.logging,java.xml,java.naming,java.desktop,java.management,java.sql,java.net.http,jdk.unsupported,jdk.crypto.ec,jdk.zipfs"; \
     fi; \
     echo "android JRE modules: ${mods}"; \
-    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-footer \
+    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-files \
       --compress zip-6 --output /opt/tools/android/jre; \
     rm -rf /tmp/jdk21.tar.gz /tmp/jadx.zip /tmp/android-build; \
     printf '%s\n' '#!/bin/sh' \
