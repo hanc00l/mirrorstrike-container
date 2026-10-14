@@ -8,6 +8,7 @@
 |------|------|------|------------|
 | **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~6.5 GB（未压缩，seclists 字典为主）|
 | **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis），仅用于托管仿真环境 | ~7.4 GB 未压缩 / ~2.77 GB 压缩（<3GB 预算）|
+| **tsec 托管精简版** | - | tsec-hosted 精简+增补变体：去 qemu-user/static（跨架构仿真不做）与全架构 chisel（换 pinned 单架构 deb）、JDK8 剔除 JavaFX；按 venom 会话缺口统计增补 bc/sqlite3/rg+fd/php-cli/tesseract-ocr/wafw00f/whatweb/checksec/exploitdb/searchsploit/grpcurl 等；云 CLI 族经 `--build-arg WITH_CLOUD=0` 默认关。构建编排同基线，仅 `-f` 换本文件 | 未压缩 ~6.5 GB（估算，较基线省 ~1GB，未实测）|
 
 ## 快速开始
 

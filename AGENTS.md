@@ -7,8 +7,9 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 ```
 .
 ├── container/
-│   ├── Dockerfile               # 完整版（四场景，pi-only）构建文件
-│   └── Dockerfile.tsec-hosted   # tsecbench 托管 all-in-one 单镜像（含 PG/Redis server 端）
+│   ├── Dockerfile                  # 完整版（四场景，pi-only）构建文件
+│   ├── Dockerfile.tsec-hosted      # tsecbench 托管 all-in-one 单镜像（含 PG/Redis server 端）
+│   └── Dockerfile.tsec-hosted-slim # tsec-hosted 精简+增补变体（见「镜像变体」）
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml     # 自动化构建与推送工作流（完整版）
@@ -20,6 +21,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 - **完整版**（`container/Dockerfile`）：四场景显式最小清单，~6.5 GB（未压缩，seclists 字典 ~1.9GB 为主）
 - **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：tsecbench 托管模式 all-in-one（内置 PG/Redis，直接 root 运行），含 chromium 默认层与 agent 刚需工具（git/tmux/r2/yara/feroxbuster/coercer/gitleaks/mysql 客户端/binutils/xxd/ltrace/gcc/paramiko），压缩后 ~2.77GB（<3GB 预算，2026-10-12 实测），仅用于托管仿真环境
+- **tsec 托管精简版**（`container/Dockerfile.tsec-hosted-slim`）：tsec-hosted 的精简+增补变体，未压缩 ~6.5GB（估算，较基线省 ~1GB，未实测）。精简：去 qemu-user/qemu-user-static（~780MB，跨架构 PWN 仿真不做）、chisel-common-binaries → pinned 单架构 chisel deb（URL+SHA256 锁定）、JDK8 fx 变体安装后剔除 JavaFX 产物（~100MB，反射链不触）。增补（依据 venom 808 会话 command-not-found 统计）：bc/sqlite3/ripgrep/fd-find/php-cli/tesseract-ocr(+chi-sim)/wafw00f/whatweb/checksec/rlwrap/ncat/iputils-arping/ldap-utils、exploitdb（`WITH_EXPLOITDB=0` 可关）、grpcurl（pinned deb）；云 CLI 族 awscli/kubectl/trivy 经 `WITH_CLOUD=0` **默认关**（d 类红区题面拍板后再开）。与基线相同的构建编排/tools-deepstrike 注入/COPY 结构一律不改，仅 `-f` 换本文件；仅用于托管仿真环境
 
 ## 任务场景与工具
 
