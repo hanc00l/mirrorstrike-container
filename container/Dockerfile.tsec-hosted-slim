@@ -1,0 +1,282 @@
+# =============================================================================
+# Dockerfile.tsec-hosted-slim — tsec-hosted 的精简+增补变体
+#
+# 基线：Dockerfile.tsec-hosted（同目录）。差异只有两类：
+#
+# 【精简】（按 2026-10-14 实机体积盘点，基线镜像 ~7.55GB）：
+#   1. qemu-user + qemu-user-static 全部去除（二进制 477MB + 依赖，合计 ~780MB）。
+#      代价：跨架构（ARM/MIPS 等）PWN/仿真题无法本地运行；gdb-multiarch /
+#      ROPgadget / r2 静态分析链不受影响。
+#   2. chisel-common-binaries（~121MB 全架构静态包）→ 换 pinned 单架构
+#      chisel_1.10.1_linux_amd64.deb（~10MB，URL+SHA256 锁定，构建期校验）。
+#   3. JDK8 仍用 8.0.482.fx-zulu（SDKMAN 上 zulu8 只有 fx 整合变体，无非 fx 版
+#      可选），但安装后剔除 JavaFX 产物（jfxrt.jar + libjfx/libdecora 等 native，
+#      ~省 100MB）。反序列化反射链不触 JavaFX；jadx/apktool 走 6b 的独立裁剪
+#      JRE 不受影响。
+#   保留不动（用户拍板）：deepstrike-kit（mcp.json 门控）、playwright/chromium
+#   浏览器层（默认开，仍可 --build-arg WITH_PLAYWRIGHT=0 关）、seclists 全套
+#   （技能硬承诺）。
+#
+# 【增补】（依据 mirrorstrike 仓库 docs/缺什么工具与缺什么内容-2026-10-14.md
+#   的 venom 808 会话 command-not-found 统计与装机清单，按性价比取舍）：
+#   - bc（73 次缺失，全场最高频）/ sqlite3（12 次）
+#   - rg + fd（ripgrep / fd-find）：knowledge/ 检索高频路径提速（~3MB）
+#   - php-cli：反序列化 payload 本地验证（14 次 command not found）
+#   - tesseract-ocr(+chi-sim)：OCR，20/20 探测确缺且无替代
+#   - wafw00f / whatweb：e1 WAF 指纹（~2MB）
+#   - checksec（pwntools `pwn checksec` 的独立 CLI）、rlwrap、ncat、
+#     iputils-arping（5 次）、ldap-utils（ldapsearch）
+#   - exploitdb（searchsploit）：c 类 CVE 检索（~60MB）
+#   - grpcurl：gRPC 接口探测（8/8 确缺），pinned deb + SHA256
+#   - 云 CLI 族（awscli/kubectl/trivy）→ ARG WITH_CLOUD=0 默认关：
+#     d 类红区是否装机需先按 venom 题面拍板（文档 §3），开了再编
+#   明确仍不装（与基线一致或文档结论）：hashcat（容器无 GPU，john 覆盖 CPU）、
+#   ghidra（~1GB，评审已否）、metasploit、semgrep、ropper
+#
+# 与基线相同的部分（构建编排、tools-deepstrike 注入、kb/app/bin COPY、
+# entrypoint 三件套）一律不改，构建命令同基线，仅 -f 换本文件：
+#   docker buildx build -f container/Dockerfile.tsec-hosted-slim \
+#     --build-context tools-deepstrike=docker-image://tools-deepstrike:latest \
+#     -t mirrorstrike-agent:<ver>-slim <应用树上下文（含 bin/ kb/ knowledge/ app/）>
+# =============================================================================
+FROM --platform=amd64 kalilinux/kali-rolling:latest
+
+# ---------- 版本号集中管理（改版本只动这里）----------
+ARG JDK8=8.0.482.fx-zulu
+# 浏览器层默认开启：chromium + playwright npm（web 类 CTF 渲染/SPA 测试刚需；
+# 体积敏感的离线构建可 --build-arg WITH_PLAYWRIGHT=0 关闭）
+ARG WITH_PLAYWRIGHT=1
+# 云 CLI 族（awscli/kubectl/trivy）：d 类云凭据题面拍板后再开（docs/缺什么工具
+# 与缺什么内容-2026-10-14.md §3；awscli ~50MB / kubectl+trivy ~100MB）
+ARG WITH_CLOUD=0
+# exploitdb（searchsploit，~60MB）：c 类 CVE 检索；体积敏感可 --build-arg WITH_EXPLOITDB=0
+ARG WITH_EXPLOITDB=1
+
+# pinned 增补资产（URL+SHA256 构建期校验，升级须同步更新）
+ARG CHISEL_URL=https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.deb
+ARG CHISEL_SHA256=0c7e4abb892faca44dbc9b7363af27e3859b68492e10771fea446fd5e8535e5d
+ARG GRPCURL_URL=https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_amd64.deb
+ARG GRPCURL_SHA256=0710dc05a28f1fac2230fd438c1fc61b90e0431809372a65aea4b53a57947451
+
+# R1 锁定资产（URL+SHA256 与 mirrorstrike deploy/reverse-static/tool-lock.json 一致；
+# 构建期 sha256sum -c 校验，升级须同步更新 lock 并重评体积）
+ARG ANDROID_JDK_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
+ARG ANDROID_JDK_SHA256=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
+ARG JADX_URL=https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar
+ARG APKTOOL_SHA256=eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd
+ARG CAPA_URL=https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip
+ARG CAPA_SHA256=07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4
+
+ENV TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    MS_RUN_MODE=hosted \
+    NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
+
+# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror）----------
+RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+# ---------- 2. apt 工具大合并（渗透 + CTF + Pwn，显式最小清单，无元包/无审计/无 metasploit）----------
+# 与基线的差异：
+#   - 去 qemu-user / qemu-user-static / libc6-dbg（跨架构仿真不做，省 ~780MB；
+#     libc6-dbg 仅 qemu 调试场景需要，gdb 本地调试不依赖）
+#   - 去 chisel-common-binaries（全架构静态包 121MB），chisel 由 §2b pinned deb 单架构补回
+#   - 增补：bc sqlite3 ripgrep fd-find php-cli tesseract-ocr tesseract-ocr-chi-sim
+#     wafw00f whatweb checksec rlwrap ncat iputils-arping ldap-utils
+# whatweb/nikto/dirsearch 基线明确不装——slim 按 2026-10-14 缺口文档补回 whatweb
+# （e1 WAF 指纹黄区，~2MB）；nikto/dirsearch 仍不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
+# 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
+# /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包：
+# seclists(全套 1.8GB) / dirb(quick|common 字典) / wordlists(rockyou) / dnsrecon(DNS 枚举字典)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bsdextrautils npm jq yq curl wget ca-certificates git tini \
+      openssh-client iputils-ping tmux strace procps iproute2 \
+      postgresql redis-server \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
+      seclists dirb dnsrecon wordlists \
+      hydra john hashid fcrackzip gitleaks \
+      default-mysql-client \
+      python3-impacket evil-winrm netexec smbclient \
+      enum4linux-ng bloodyad coercer proxychains4 sshpass \
+      netcat-openbsd ncat socat tcpdump tshark dnsutils whois \
+      gdb gdb-multiarch radare2 yara ltrace binutils xxd binwalk foremost steghide exiftool \
+      unzip p7zip-full unrar-free xz-utils patchelf \
+      python3 python3-pip python3-venv python3-paramiko \
+      gcc ruby sudo less vim-tiny file \
+      bc sqlite3 ripgrep fd-find php-cli \
+      tesseract-ocr tesseract-ocr-chi-sim \
+      wafw00f whatweb checksec rlwrap iputils-arping ldap-utils && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+# 数据库客户端说明：mysql 走 default-mysql-client（仅客户端，无 server）；
+# redis-cli 已随 redis-server 的 redis-tools 依赖带入；psql 随 postgresql 服务端带入
+
+# ---------- 2b. pinned 单架构工具：chisel + grpcurl（替换 chisel-common-binaries，-~110MB）----------
+RUN set -eux; \
+    curl -fsSL -o /tmp/chisel.deb "${CHISEL_URL}"; \
+    echo "${CHISEL_SHA256}  /tmp/chisel.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/chisel.deb; \
+    curl -fsSL -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
+    echo "${GRPCURL_SHA256}  /tmp/grpcurl.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/grpcurl.deb; \
+    rm -f /tmp/chisel.deb /tmp/grpcurl.deb; \
+    chisel --version; grpcurl --version
+
+# ---------- 2b+. 增补兼容软链：Debian 系 fd-find 二进制名为 fdfind，补 fd 别名 ----------
+RUN command -v fdfind >/dev/null 2>&1 && ln -sf "$(command -v fdfind)" /usr/local/bin/fd; \
+    command -v rg >/dev/null 2>&1; command -v fd >/dev/null 2>&1
+
+# ---------- 2c. 可选层：exploitdb（searchsploit）/ 云 CLI 族 ----------
+RUN set -eux; \
+    if [ "$WITH_EXPLOITDB" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends exploitdb && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_CLOUD" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends awscli kubectl trivy && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 不装）----------
+# Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在
+# Python 3.14 下回溯出的 2019 年 3.12 源码包；apt 依赖闭包自动带上 capstone 等）。
+# ropper 不装：其依赖 filebytes 的 setup.py 使用 Python 3.12+ 移除的 ast.Str，
+# 在本底座不可构建且 Kali 无 apt 包；ROPgadget + pwntools ROP 已覆盖 gadget 需求。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3-pwntools python3-ropgadget python3-z3 \
+      python3-pycryptodome python3-requests python3-bs4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    gem install one_gadget --no-document
+
+# ---------- 4. AI 执行器：仅 pi-coding-agent（无 claude-code/codex/agent-browser）----------
+# pi 扩展 extensions/mirrorstrike-mcp.ts 裸导入 @modelcontextprotocol/sdk；
+# 镜像内 pi-agent 工作区自带 node_modules（build-image.sh 组装），全局包仅为 pi CLI
+# 与 SDK 解析兜底。
+RUN npm install -g @earendil-works/pi-coding-agent @modelcontextprotocol/sdk
+
+# Node 版本门（pi-coding-agent 要求 >= 22.19）+ pi CLI 冒烟
+RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
+    pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
+
+# ---------- 5. 可选浏览器层（--build-arg WITH_PLAYWRIGHT=1，slim 仍默认开）----------
+RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
+      apt-get clean && rm -rf /var/lib/apt/lists/* && \
+      npm install -g playwright @playwright/mcp; \
+    fi
+
+# ---------- 6. SDKMAN JDK8（单 JDK；slim 装 fx 变体后剔除 JavaFX 产物，省 ~100MB）----------
+# zulu8 在 SDKMAN 仅有 fx 整合变体（无非 fx 版本号），故安装后按文件名剔除
+# JavaFX：jfxrt.jar 与 libjfx*/libdecora* native。反射利用链（ysoserial/
+# JNDIExploit/gsl5/mdut）不触 JavaFX，剔除不影响。
+RUN curl -s "https://get.sdkman.io" | bash && \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
+              sdk install java ${JDK8} && \
+              sdk default java ${JDK8}' && \
+    find "$HOME/.sdkman/candidates/java/current" \( -iname "*jfx*" -o -iname "javafx*" \) \
+      \( -name "*.jar" -o -name "*.so" -o -name "*.diz" \) -delete && \
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
+# 登录 shell（bash -l）会被 /etc/profile 重写 PATH 丢掉 java——补 source sdkman-init；
+# git 全局身份避免 agent 仓库分析时 commit 因身份缺失被拒
+RUN echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /root/.profile && \
+    git config --global user.email "agent@mirrorstrike" && \
+    git config --global user.name "mirrorstrike-agent"
+ENV JAVA_HOME=/root/.sdkman/candidates/java/current
+ENV PATH=/root/.sdkman/candidates/java/current/bin:${PATH}
+
+# ---------- 6b. Android 逆向层（R1-T2）：jadx + apktool + jlink 裁剪 JRE ----------
+# jadx/apktool 要求 JDK>=11；默认 JDK8（反射链刚需）不动，android 工具经 wrapper
+# 显式指向 /opt/tools/android/jre，双 JAVA_HOME 互不污染。
+# JRE 用 jlink 按 jadx/apktool 依赖裁剪（jdeps 动态计算，失败回退固定模块集），
+# 体积远小于整装 JDK；构建用 Temurin 21（tool-lock 已锁 URL+SHA256）。
+RUN set -eux; \
+    mkdir -p /tmp/android-build /opt/tools/android; \
+    curl -fsSL -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
+    echo "${ANDROID_JDK_SHA256}  /tmp/jdk21.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/jdk21.tar.gz -C /tmp/android-build; \
+    curl -fsSL -o /tmp/jadx.zip "${JADX_URL}"; \
+    echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c -; \
+    unzip -q /tmp/jadx.zip -d /opt/tools/android/jadx; \
+    curl -fsSL -o /opt/tools/android/apktool.jar "${APKTOOL_URL}"; \
+    echo "${APKTOOL_SHA256}  /opt/tools/android/apktool.jar" | sha256sum -c -; \
+    jdk21_dir="$(find /tmp/android-build -maxdepth 1 -type d -name 'jdk-21*' | head -1)"; \
+    mods="$("${jdk21_dir}/bin/jdeps" --print-module-deps --ignore-missing-deps \
+      /opt/tools/android/jadx/lib/*.jar /opt/tools/android/apktool.jar 2>/dev/null || true)"; \
+    if [ -z "${mods}" ]; then \
+      mods="java.base,java.logging,java.xml,java.naming,java.desktop,java.management,java.sql,java.net.http,jdk.unsupported,jdk.crypto.ec,jdk.zipfs"; \
+    fi; \
+    echo "android JRE modules: ${mods}"; \
+    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-files \
+      --compress zip-6 --output /opt/tools/android/jre; \
+    rm -rf /tmp/jdk21.tar.gz /tmp/jadx.zip /tmp/android-build; \
+    printf '%s\n' '#!/bin/sh' \
+      '# R1-T2：android 工具显式指向裁剪 JRE（默认 java 仍为 JDK8，互不污染）' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'export PATH="/opt/tools/android/jre/bin:${PATH}"' \
+      'exec /opt/tools/android/jadx/bin/jadx "$@"' > /usr/local/bin/jadx; \
+    printf '%s\n' '#!/bin/sh' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'exec /opt/tools/android/jre/bin/java -jar /opt/tools/android/apktool.jar "$@"' > /usr/local/bin/apktool; \
+    chmod 0755 /usr/local/bin/jadx /usr/local/bin/apktool; \
+    /usr/local/bin/jadx --version; \
+    /usr/local/bin/apktool --version
+
+# ---------- 6c. capa（R1-T3）：恶意软件能力识别单二进制 + 离线规则 ----------
+# 规则文件随镜像（禁联网更新，对齐 nuclei 模板处理方式）；capa 默认在二进制
+# 同级 rules/ 目录找规则。ELF 能力分析补充 r2/gdb 之外的语义层结论。
+RUN set -eux; \
+    mkdir -p /opt/tools/capa; \
+    curl -fsSL -o /tmp/capa.zip "${CAPA_URL}"; \
+    echo "${CAPA_SHA256}  /tmp/capa.zip" | sha256sum -c -; \
+    unzip -q /tmp/capa.zip -d /tmp/capa-unpack; \
+    capa_bin="$(find /tmp/capa-unpack -type f -name capa | head -1)"; \
+    install -m 0755 "${capa_bin}" /opt/tools/capa/capa; \
+    ln -sf /opt/tools/capa/capa /usr/local/bin/capa; \
+    git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/tools/capa/rules; \
+    rm -rf /opt/tools/capa/rules/.git /tmp/capa.zip /tmp/capa-unpack; \
+    capa --version
+
+# ---------- 7. nuclei 离线模板指向镜像内路径（禁联网更新）----------
+RUN mkdir -p /root/.config/nuclei && \
+    printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/nuclei-templates' \
+      > /root/.config/nuclei/config.yaml
+
+# ---------- 8. 目录占位（运行时挂载点：本地仿真 bind mount）----------
+# 注：logs/ 不预置——entrypoint 运行时自建，预置空目录会被密钥扫描按
+# “烘焙日志目录”规则误命中
+RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
+                 /opt/mirrorstrike/state /opt/mirrorstrike/pi-agent/agents
+
+# ---------- 9. 离线工具（--build-context tools-deepstrike：/opt/tools 子集 + deepstrike-kit）----------
+# 注：tools-deepstrike 镜像含完整 /opt/tools；此处仅 COPY 托管裁剪子集
+#（shiro_attack / yak-engine / info-gather 不进镜像，方案 §4.5.2）
+COPY --from=tools-deepstrike /opt/tools/frp          /opt/tools/frp
+COPY --from=tools-deepstrike /opt/tools/fscan        /opt/tools/fscan
+COPY --from=tools-deepstrike /opt/tools/gsl5-cli     /opt/tools/gsl5-cli
+COPY --from=tools-deepstrike /opt/tools/mdut-cli     /opt/tools/mdut-cli
+COPY --from=tools-deepstrike /opt/tools/JNDIExploit  /opt/tools/JNDIExploit
+COPY --from=tools-deepstrike /opt/tools/ysoserial    /opt/tools/ysoserial
+COPY --from=tools-deepstrike /opt/tools/suo5         /opt/tools/suo5
+# deepstrike-kit（MCP 入口；yak 通道随 yak-engine 缺席降级，gsl5/mdut bash 技能兜底）
+COPY --from=tools-deepstrike /opt/deepstrike         /opt/deepstrike
+
+# ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
+COPY kb/nuclei-templates/   /opt/kb/nuclei-templates/
+COPY kb/Vulnerability-Wiki/ /opt/kb/Vulnerability-Wiki/
+COPY knowledge/             /opt/mirrorstrike/knowledge/
+
+# ---------- 11. 应用树（主上下文：能力文件 + pi-agent 工作区 + hosted 配置/脚本）----------
+COPY app/                   /opt/mirrorstrike/
+# Go 二进制（构建编排方宿主机编译，随主上下文 bin/ 提供）
+COPY bin/                   /opt/mirrorstrike/bin/
+
+WORKDIR /opt/mirrorstrike
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/mirrorstrike/deploy/hosted/entrypoint.sh"]
+CMD ["run"]
