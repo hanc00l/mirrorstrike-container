@@ -55,8 +55,10 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #     二者运行，交互默认 java 仍为第 7 节 sdkman JDK8——sdkman PATH 前置，
 #     apt 的 update-alternatives 不影响 sdkman 路径）
 #   chromium 栈 — playwright 浏览器；xvfb 供有头场景 xvfb-run 兜底
-# 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
-# /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包。
+# 字典（2026-10-15 架构调整）：镜像不再预装任何字典——seclists(全套 1.8GB) /
+# dirb(quick|common) / wordlists(rockyou) 已移除。字典由平台 dicts/ 能力同步承担
+# （L1 查询表 + L2 小字典 + L3 中字典 vendor 入库，Worker 物化到任务工作区 dicts/），
+# 技能与手册一律按任务相对路径引用。dnsrecon 保留（DNS 枚举工具本体）。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates curl wget git sudo less vim-tiny file \
@@ -64,7 +66,7 @@ RUN apt-get update && \
       bsdextrautils npm jq yq \
       openssh-client sshpass netcat-openbsd socat tcpdump tshark dnsutils whois proxychains4 \
       nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
-      seclists dirb dnsrecon wordlists \
+      dnsrecon \
       hydra john hashid fcrackzip gitleaks \
       python3-impacket evil-winrm netexec smbclient enum4linux-ng bloodyad coercer \
       chisel-common-binaries default-mysql-client \

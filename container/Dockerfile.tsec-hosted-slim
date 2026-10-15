@@ -14,8 +14,9 @@
 #      ~省 100MB）。反序列化反射链不触 JavaFX；jadx/apktool 走 6b 的独立裁剪
 #      JRE 不受影响。
 #   保留不动（用户拍板）：deepstrike-kit（mcp.json 门控）、playwright/chromium
-#   浏览器层（默认开，仍可 --build-arg WITH_PLAYWRIGHT=0 关）、seclists 全套
-#   （技能硬承诺）。
+#   浏览器层（默认开，仍可 --build-arg WITH_PLAYWRIGHT=0 关）。
+#   2026-10-15 反转：seclists 全套不再保留——字典统一由平台 dicts/ 能力同步承担
+#   （见 §2 注释），本变体随基线一并移除（-~1.8GB，为 slim 最大单项瘦身）。
 #
 # 【增补】（依据 mirrorstrike 仓库 docs/缺什么工具与缺什么内容-2026-10-14.md
 #   的 venom 808 会话 command-not-found 统计与装机清单，按性价比取舍）：
@@ -89,16 +90,17 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #     wafw00f whatweb checksec rlwrap ncat iputils-arping ldap-utils
 # whatweb/nikto/dirsearch 基线明确不装——slim 按 2026-10-14 缺口文档补回 whatweb
 # （e1 WAF 指纹黄区，~2MB）；nikto/dirsearch 仍不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
-# 字典集为技能硬承诺（system 技能 + auth-brute 手册引用 /usr/share/seclists、
-# /usr/share/wordlists/rockyou.txt.gz、/usr/share/dirb/wordlists），必须打包：
-# seclists(全套 1.8GB) / dirb(quick|common 字典) / wordlists(rockyou) / dnsrecon(DNS 枚举字典)
+# 字典（2026-10-15 架构调整）：镜像不再预装任何字典——seclists(全套 1.8GB) /
+# dirb(quick|common) / wordlists(rockyou) 已移除。字典由平台 dicts/ 能力同步承担
+# （L1 查询表 + L2 小字典 + L3 中字典 vendor 入库，Worker 物化到任务工作区 dicts/），
+# 技能与手册一律按任务相对路径引用。dnsrecon 保留（DNS 枚举工具本体）。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       bsdextrautils npm jq yq curl wget ca-certificates git tini \
       openssh-client iputils-ping tmux strace procps iproute2 \
       postgresql redis-server \
       nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
-      seclists dirb dnsrecon wordlists \
+      dnsrecon \
       hydra john hashid fcrackzip gitleaks \
       default-mysql-client \
       python3-impacket evil-winrm netexec smbclient \
