@@ -8,8 +8,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 .
 ├── container/
 │   ├── Dockerfile                  # 完整版（四场景，pi-only）构建文件
-│   ├── Dockerfile.tsec-hosted      # tsecbench 托管 all-in-one 单镜像（含 PG/Redis server 端）
-│   └── Dockerfile.tsec-hosted-slim # tsec-hosted 精简+增补变体（见「镜像变体」）
+│   └── Dockerfile.tsec-hosted      # tsecbench 托管 all-in-one 唯一最终版（含 PG/Redis server 端）
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml     # 自动化构建与推送工作流（完整版）
@@ -19,9 +18,15 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 ## 镜像变体
 
-- **完整版**（`container/Dockerfile`）：四场景显式最小清单，~6.5 GB（未压缩，seclists 字典 ~1.9GB 为主）
-- **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：tsecbench 托管模式 all-in-one（内置 PG/Redis，直接 root 运行），含 chromium 默认层与 agent 刚需工具（git/tmux/r2/yara/feroxbuster/coercer/gitleaks/mysql 客户端/binutils/xxd/ltrace/gcc/paramiko），压缩后 ~2.77GB（<3GB 预算，2026-10-12 实测），仅用于托管仿真环境
-- **tsec 托管精简版**（`container/Dockerfile.tsec-hosted-slim`）：tsec-hosted 的精简+增补变体，未压缩 ~6.5GB（估算，较基线省 ~1GB，未实测）。精简：去 qemu-user/qemu-user-static（~780MB，跨架构 PWN 仿真不做）、chisel-common-binaries → pinned 单架构 chisel deb（URL+SHA256 锁定）、JDK8 fx 变体安装后剔除 JavaFX 产物（~100MB，反射链不触）。增补（依据 venom 808 会话 command-not-found 统计）：bc/sqlite3/ripgrep/fd-find/php-cli/tesseract-ocr(+chi-sim)/wafw00f/whatweb/checksec/rlwrap/ncat/iputils-arping/ldap-utils、exploitdb（`WITH_EXPLOITDB=0` 可关）、grpcurl（pinned deb）；云 CLI 族 awscli/kubectl/trivy 经 `WITH_CLOUD=0` **默认关**（d 类红区题面拍板后再开）。与基线相同的构建编排/tools-deepstrike 注入/COPY 结构一律不改，仅 `-f` 换本文件；仅用于托管仿真环境
+- **完整版**（`container/Dockerfile`）：四场景显式最小清单。2026-10-15 起同样**不预装任何字典**（seclists/dirb/rockyou 已移除）
+- **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：**唯一最终版**（2026-10-15 由原基线与 slim 精简变体合并收敛，slim 文件已删除）。要点：
+  - 体积收敛：去 qemu-user/-static（~780MB，跨架构 PWN 仿真不做）、chisel-common-binaries → pinned 单架构 chisel deb（URL+SHA256 锁定）、JDK8 fx 变体安装后剔除 JavaFX（~100MB，反射链不触）
+  - **零预装字典**（2026-10-15 契约）：seclists（实测 1,861MB）/dirb/wordlists(rockyou)/dnsrecon 全部移出 apt；字典由 mirrorstrike 平台字典库 `dicts/`（应用树随 `app/` COPY 进镜像）承担，Worker 物化到任务工作区，skills 按任务相对路径引用保证一致性
+  - 工具面对齐 dict-base AGENTS.md 预装清单：安卓链 adb/apksigner/zipalign/aapt、make/zip、python 科学库（numpy/sympy/Pillow/lxml/PyJWT/pymongo/psycopg2/pymysql，pg8000 走 pip）、bc/sqlite3/ripgrep/fd-find/php-cli/tesseract/wafw00f/whatweb/checksec/rlwrap/ncat/arping/ldap-utils、exploitdb（`WITH_EXPLOITDB=0` 可关）、grpcurl（pinned deb）、`playwright-cli` wrapper（固定系统 Chromium）
+  - 门控：`WITH_KUBECTL=1`（kubectl，dict-base 硬承诺）/ `WITH_CLOUD=0`（awscli/trivy，d 类红区题面拍板后再开）/ `WITH_PLAYWRIGHT=1`（浏览器层默认开）
+  - 排除项（缺失即预期）：qemu-user/-static、hashcat（无 GPU，john 覆盖）、ghidra、metasploit、semgrep、ropper、nikto、dirsearch、一切预装字典
+  - 构建统一走 mirrorstrike `deploy/hosted/build-image.sh`（原 build-image-slim.sh 已删；导出 + **3GB 压缩门禁**在该脚本内强制）
+  - 仅用于托管仿真环境
 
 ## 任务场景与工具
 
