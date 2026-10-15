@@ -1,13 +1,13 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（tsec-hosted 仅 URL+SHA256 锁定的 pinned 资产例外）、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
 
 ## 镜像变体
 
 | 变体 | 标签 | 用途 | 大小（估算）|
 |------|------|------|------------|
 | **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~4.6 GB 未压缩（2026-10-15 零预装字典后估算，未实测）|
-| **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis server 端），仅用于托管仿真环境。**唯一最终版**：2026-10-15 由原基线与 slim 合并收敛（slim 文件已删除），体积收敛史与排除项见文件头 | ~4.9 GB 未压缩（估算，未实测）/ 压缩 <3 GB（build-image.sh 3GB 门禁强制）|
+| **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis server 端），仅用于托管仿真环境。**唯一最终版**：2026-10-15 由原基线与 slim 合并收敛（slim 文件已删除）；含 nmap 入口修复（setcap 削 `cap_net_admin` + 非 root 强制 `--unprivileged`），逐项对照、体积收敛史与排除项见 [AGENTS.md](AGENTS.md) | ~4.9 GB 未压缩（估算，未实测）/ 压缩 <3 GB（build-image.sh 3GB 门禁强制）|
 
 ## 快速开始
 
@@ -22,6 +22,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 | 要点 | 说明 |
 |------|------|
 | 显式最小 apt 清单 | 无元包、无 metasploit，按四场景显式列出工具 |
+| 零预装字典 | seclists/dirb/wordlists(rockyou) 不随镜像，由平台 `dicts/` 能力同步承担（两镜像同）|
 | 零 GitHub 下载 | 构建期无任何 GitHub release / git clone 依赖；nuclei/naabu 用 Kali 源版本 |
 | AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底）|
 | 单 JDK8 | SDKMAN Zulu；ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
