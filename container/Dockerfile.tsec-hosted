@@ -1,50 +1,49 @@
 # =============================================================================
-# 注：不写 `# syntax=` 指令——该指令会让 buildx 去 Docker Hub 拉 frontend 镜像，
-# 托管/离线环境常不可达；本文件只用到内置 frontend 支持的特性
-#（COPY --from=<named context> + --build-context），无需外部 frontend。
-# =============================================================================
-# Dockerfile.tsec-hosted — tsecbench 托管模式 all-in-one 单镜像
+# Dockerfile.tsec-hosted — tsec 托管镜像唯一最终版（2026-10-15 收敛）
 #
-# 方案：mirrorstrike 仓库 docs/tsecbench-hosted-mode-refactor-plan.md §4.5
-# 工具面补全：docs/tsecbench-1012-hosted-round1-remediation-plan.md R1
-# 与兄弟 Dockerfile（完整版）的关键差异：
-#   - 弃用 kali-linux-headless 元包（含 metasploit 全家，参考镜像 16.8GB 主因），
-#     改显式最小清单：渗透 + CTF + Pwn + 逆向兜底（r2/yara），审计保留 gitleaks
-#   - GitHub 下载仅限 R1 锁定资产（jadx/apktool/capa/temurin-jdk21：
-#     URL+SHA256 复用 deploy/reverse-static/tool-lock.json 锁定值，构建时校验）；
-#     其余历史 GitHub 工具（katana/dalfox/cloudfox/kerbrute/ysoserial-jar/
-#     jwt_tool/jdwp-shellifier/pwndbg）仍全部取消；nuclei/naabu 用 Kali 源版本
-#   - npm 全局仅 @earendil-works/pi-coding-agent（+ playwright 默认层：chromium
-#     无头浏览器，经 mcp.json --executable-path /usr/bin/chromium 接线），
-#     无 claude-code / codex / agent-browser
-#   - agent 刚需补装：git / openssh-client / iputils-ping / tmux / strace
-#     （coding agent、ssh 类利用、连通性与常驻隧道）、二进制分析最小集
-#     binutils / xxd / ltrace / gcc（round15 hosted 实证 agent 调 strings/xxd
-#     失败；对齐 pi-slim 主清单与 skills「PATH 实测」承诺）、python3-paramiko
-#     （SSH 脚本化）、数据库客户端 mysql（redis-cli 已随 redis-server→redis-tools
-#     依赖带入，不装 server；semgrep 仍不装——tsec 场景映射无 code-audit）
-#   - 密码类补全（R1-T1）：hashid（hash 指纹识别）/ fcrackzip（加密 zip）；
-#     john 已含 zip2john/rar2john 脚本族，hashcat 不装（CPU OpenCL 依赖重）
-#   - 单 JDK8（SDKMAN zulu，gsl5/mdut/JNDIExploit/ysoserial 反射链需 8）
-#     + Android 专用裁剪 JRE（R1-T2，jlink 自锁定 Temurin 21 裁剪——jadx/apktool
-#     要求 JDK≥11，lock 中已锁定 21 的 URL+SHA256，未引入无哈希校验的 17 下载；
-#     双 JAVA_HOME 经 wrapper 脚本隔离，默认 java 恒为 JDK8）
-#   - ghidra 明确不装（2026-10-13 评审决策：空间占用，导出门禁余量 ~200MB vs
-#     解压 ~1GB）：ELF 反编译降级路径 = r2 伪码（pdc）+ gdb + 字符串/头部分析
-#     （写入 skills 文本向 agent 明示）
-#   - 直接 root 运行（all-in-one 需 root 跑 PG；Agent 无容器边界）
-#   - 携带容器运行时：PostgreSQL / Redis / tini（entrypoint 自举三件套+调度器）
-#   - Go 二进制由构建编排方（mirrorstrike deploy/hosted/build-image.sh）宿主机编译后
-#     随主上下文以 bin/ 提供（对齐 deploy/build.sh 惯例，dir 型 build-context 无法
-#     承载 RUN 编译阶段）
-#   - /opt/tools 子集与 deepstrike-kit 经 --build-context tools-deepstrike 注入
-#     （docker import tools_deepstrike.tar.gz 而来，排除 shiro_attack/yak-engine/
-#      info-gather 的裁剪由 COPY 子集声明完成）
+# 本文件由原基线与 Dockerfile.tsec-hosted-slim（精简变体，已删除）合并而来：
+# 以 slim 的精简+增补为主体，叠加 2026-10-15 工具面复核增补（见下）。
 #
-# 构建编排（含编译、上下文组装与门禁）在 mirrorstrike 仓库 deploy/hosted/build-image.sh：
-#   docker buildx build -f container/Dockerfile.tsec-hosted \
-#     --build-context tools-deepstrike=docker-image://tools-deepstrike:latest \
-#     -t mirrorstrike-agent:<ver> <应用树上下文（含 bin/ kb/ knowledge/ app/）>
+# 【精简】（按 2026-10-14 实机体积盘点，合并前基线镜像 ~7.55GB）：
+#   1. qemu-user + qemu-user-static 全部去除（二进制 477MB + 依赖，合计 ~780MB）。
+#      代价：跨架构（ARM/MIPS 等）PWN/仿真题无法本地运行；gdb-multiarch /
+#      ROPgadget / r2 静态分析链不受影响。
+#   2. chisel-common-binaries（~121MB 全架构静态包）→ 换 pinned 单架构
+#      chisel_1.10.1_linux_amd64.deb（~10MB，URL+SHA256 锁定，构建期校验）。
+#   3. JDK8 仍用 8.0.482.fx-zulu（SDKMAN 上 zulu8 只有 fx 整合变体，无非 fx 版
+#      可选），但安装后剔除 JavaFX 产物（jfxrt.jar + libjfx/libdecora 等 native，
+#      ~省 100MB）。反序列化反射链不触 JavaFX；jadx/apktool 走 6b 的独立裁剪
+#      JRE 不受影响。
+#   4. 零预装字典（2026-10-15 契约）：seclists(实测 1,861MB)/dirb/wordlists(rockyou)
+#      已移除，字典由平台 dicts/ 能力同步承担（见 §2 注释，-~1.8GB 最大单项瘦身）。
+#
+# 【增补】（依据 docs/缺什么工具与缺什么内容-2026-10-14.md + round-4 §10 实测 +
+#   dict-base AGENTS.md 预装清单对齐）：
+#   - bc（73 次缺失，全场最高频）/ sqlite3（12 次）
+#   - rg + fd（ripgrep / fd-find）：knowledge/ 检索高频路径提速（~3MB）
+#   - php-cli：反序列化 payload 本地验证（14 次 command not found）
+#   - tesseract-ocr(+chi-sim)：OCR，20/20 探测确缺且无替代
+#   - wafw00f / whatweb：WAF 指纹（~2MB）
+#   - checksec、rlwrap、ncat、iputils-arping（5 次）、ldap-utils（ldapsearch）
+#   - exploitdb（searchsploit）：c 类 CVE 检索（~60MB）
+#   - grpcurl：gRPC 接口探测（8/8 确缺），pinned deb + SHA256
+#   - 安卓链补齐（round-4 §10 坐实的唯一真缺失）：adb / apksigner / zipalign / aapt
+#   - make / zip：dict-base 清单承诺（gcc 既有）
+#   - python 科学/协议库：numpy / sympy / Pillow / lxml / PyJWT / pymongo /
+#     psycopg2 / pymysql（pg8000 无 apt 包，走 pip 兜底）
+#   - kubectl：ARG WITH_KUBECTL=1 默认开（dict-base 硬承诺，~55MB）；
+#     awscli/trivy 仍由 WITH_CLOUD=0 门控（d 类红区题面拍板后再开）
+#   - playwright-cli wrapper：与 dict-base AGENTS.md 用法对齐
+#     （PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium，固定系统 Chromium）
+#
+# 【明确不装】（书面化排除项，复核时缺失即属预期）：
+#   qemu-user/-static（体积决策）、hashcat（无 GPU，john 覆盖）、ghidra（~1GB，
+#   评审已否）、metasploit、semgrep、ropper、nikto、dirsearch、
+#   awscli/trivy（d 类红区待拍板）、一切预装字典（dicts/ 契约）。
+#
+# 构建统一走 mirrorstrike deploy/hosted/build-image.sh
+# （原 build-image-slim.sh 已删除；导出 + 3GB 压缩门禁在该脚本内强制）。
+# 仅用于托管仿真环境。
 # =============================================================================
 FROM --platform=amd64 kalilinux/kali-rolling:latest
 
@@ -53,6 +52,20 @@ ARG JDK8=8.0.482.fx-zulu
 # 浏览器层默认开启：chromium + playwright npm（web 类 CTF 渲染/SPA 测试刚需；
 # 体积敏感的离线构建可 --build-arg WITH_PLAYWRIGHT=0 关闭）
 ARG WITH_PLAYWRIGHT=1
+# 云 CLI 族（awscli/kubectl/trivy）：d 类云凭据题面拍板后再开（docs/缺什么工具
+# 与缺什么内容-2026-10-14.md §3；awscli ~50MB / kubectl+trivy ~100MB）
+ARG WITH_CLOUD=0
+# exploitdb（searchsploit，~60MB）：c 类 CVE 检索；体积敏感可 --build-arg WITH_EXPLOITDB=0
+ARG WITH_EXPLOITDB=1
+# kubectl（~55MB）：dict-base AGENTS.md 预装清单硬承诺（集群类题目），默认开；
+# awscli/trivy 仍由 WITH_CLOUD 门控（d 类云凭据红区，题面拍板后再开）
+ARG WITH_KUBECTL=1
+
+# pinned 增补资产（URL+SHA256 构建期校验，升级须同步更新）
+ARG CHISEL_URL=https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.deb
+ARG CHISEL_SHA256=0c7e4abb892faca44dbc9b7363af27e3859b68492e10771fea446fd5e8535e5d
+ARG GRPCURL_URL=https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_amd64.deb
+ARG GRPCURL_SHA256=0710dc05a28f1fac2230fd438c1fc61b90e0431809372a65aea4b53a57947451
 
 # R1 锁定资产（URL+SHA256 与 mirrorstrike deploy/reverse-static/tool-lock.json 一致；
 # 构建期 sha256sum -c 校验，升级须同步更新 lock 并重评体积）
@@ -77,11 +90,20 @@ ENV TZ=Asia/Shanghai \
 RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
 
 # ---------- 2. apt 工具大合并（渗透 + CTF + Pwn，显式最小清单，无元包/无审计/无 metasploit）----------
-# whatweb/nikto/dirsearch 明确不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
+# 与基线的差异：
+#   - 去 qemu-user / qemu-user-static / libc6-dbg（跨架构仿真不做，省 ~780MB；
+#     libc6-dbg 仅 qemu 调试场景需要，gdb 本地调试不依赖）
+#   - 去 chisel-common-binaries（全架构静态包 121MB），chisel 由 §2b pinned deb 单架构补回
+#   - 增补：bc sqlite3 ripgrep fd-find php-cli tesseract-ocr tesseract-ocr-chi-sim
+#     wafw00f whatweb checksec rlwrap ncat iputils-arping ldap-utils
+# whatweb/nikto/dirsearch 基线明确不装——slim 按 2026-10-14 缺口文档补回 whatweb
+# （e1 WAF 指纹黄区，~2MB）；nikto/dirsearch 仍不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
 # 字典（2026-10-15 架构调整）：镜像不再预装任何字典——seclists(全套 1.8GB) /
 # dirb(quick|common) / wordlists(rockyou) 已移除。字典由平台 dicts/ 能力同步承担
 # （L1 查询表 + L2 小字典 + L3 中字典 vendor 入库，Worker 物化到任务工作区 dicts/），
 # 技能与手册一律按任务相对路径引用。dnsrecon 保留（DNS 枚举工具本体）。
+# 安卓链补齐（round-4 §10 实测坐实的真缺失）+ make/zip + python 科学/协议库
+# （对齐 dict-base AGENTS.md 预装清单；pg8000 无 Kali apt 包，§2c 后 pip 兜底）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       bsdextrautils npm jq yq curl wget ca-certificates git tini \
@@ -92,17 +114,56 @@ RUN apt-get update && \
       hydra john hashid fcrackzip gitleaks \
       default-mysql-client \
       python3-impacket evil-winrm netexec smbclient \
-      enum4linux-ng bloodyad coercer proxychains4 sshpass chisel-common-binaries \
-      netcat-openbsd socat tcpdump tshark dnsutils whois \
+      enum4linux-ng bloodyad coercer proxychains4 sshpass \
+      netcat-openbsd ncat socat tcpdump tshark dnsutils whois \
       gdb gdb-multiarch radare2 yara ltrace binutils xxd binwalk foremost steghide exiftool \
-      unzip p7zip-full unrar-free xz-utils patchelf \
-      qemu-user qemu-user-static libc6-dbg libc6-dev \
+      unzip zip p7zip-full unrar-free xz-utils patchelf \
       python3 python3-pip python3-venv python3-paramiko \
-      gcc ruby sudo less vim-tiny file && \
+      gcc make ruby sudo less vim-tiny file \
+      bc sqlite3 ripgrep fd-find php-cli \
+      tesseract-ocr tesseract-ocr-chi-sim \
+      wafw00f whatweb checksec rlwrap iputils-arping ldap-utils \
+      adb apksigner zipalign aapt \
+      python3-numpy python3-sympy python3-pil python3-lxml \
+      python3-jwt python3-pymongo python3-psycopg2 python3-pymysql && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+# pg8000（dict-base 清单）无 apt 包：pip 单包补齐，失败不阻断（非核心依赖）
+RUN pip3 install --no-cache-dir pg8000 || echo "[warn] pg8000 pip 安装失败，非核心依赖，继续构建"
 # 数据库客户端说明：mysql 走 default-mysql-client（仅客户端，无 server）；
-# redis-cli 已随 redis-server 的 redis-tools 依赖带入（hosted 自带 Redis 实例）
+# redis-cli 已随 redis-server 的 redis-tools 依赖带入；psql 随 postgresql 服务端带入
+
+# ---------- 2b. pinned 单架构工具：chisel + grpcurl（替换 chisel-common-binaries，-~110MB）----------
+RUN set -eux; \
+    curl -fsSL -o /tmp/chisel.deb "${CHISEL_URL}"; \
+    echo "${CHISEL_SHA256}  /tmp/chisel.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/chisel.deb; \
+    curl -fsSL -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
+    echo "${GRPCURL_SHA256}  /tmp/grpcurl.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/grpcurl.deb; \
+    rm -f /tmp/chisel.deb /tmp/grpcurl.deb; \
+    chisel --version; grpcurl --version
+
+# ---------- 2b+. 增补兼容软链：Debian 系 fd-find 二进制名为 fdfind，补 fd 别名 ----------
+RUN command -v fdfind >/dev/null 2>&1 && ln -sf "$(command -v fdfind)" /usr/local/bin/fd; \
+    command -v rg >/dev/null 2>&1; command -v fd >/dev/null 2>&1
+
+# ---------- 2c. 可选层：exploitdb（searchsploit）/ 云 CLI 族 ----------
+RUN set -eux; \
+    if [ "$WITH_EXPLOITDB" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends exploitdb && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_CLOUD" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends awscli trivy && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_KUBECTL" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends kubectl && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    command -v kubectl || echo "[warn] kubectl 未启用（WITH_KUBECTL=0）"; \
+    kubectl version --client=true 2>/dev/null | head -1 || true
 
 # ---------- 3. pip / gem（Pwn + CTF 必备；审计类 semgrep 不装）----------
 # Python 工具优先取 Kali apt 发行版包（python3-pwntools=4.15 而非 pip 在
@@ -126,19 +187,33 @@ RUN npm install -g @earendil-works/pi-coding-agent @modelcontextprotocol/sdk
 RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
     pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
 
-# ---------- 5. 可选浏览器层（--build-arg WITH_PLAYWRIGHT=1）----------
+# ---------- 5. 可选浏览器层（默认开；--build-arg WITH_PLAYWRIGHT=0 关闭）----------
 RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
       apt-get update && \
       apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
       apt-get clean && rm -rf /var/lib/apt/lists/* && \
       npm install -g playwright @playwright/mcp; \
-    fi
+      # playwright-cli wrapper：与 dict-base AGENTS.md 用法对齐——固定系统 Chromium，
+      # 免下载浏览器；全局裸 playwright CLI 不删（@playwright/mcp 同源依赖），
+      # 对 Agent 的承诺面统一收敛到 playwright-cli 这一个入口
+      printf '%s\n' '#!/bin/sh' \
+        '# 浏览器自动化统一入口（dict-base AGENTS.md 对齐）：系统 Chromium，免下载浏览器' \
+        'export PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium' \
+        'exec playwright "$@"' > /usr/local/bin/playwright-cli; \
+      chmod 0755 /usr/local/bin/playwright-cli; \
+    fi; \
+    playwright-cli --version >/dev/null 2>&1 || echo "[warn] 浏览器层未启用（WITH_PLAYWRIGHT=0），playwright-cli 缺席"
 
-# ---------- 6. SDKMAN JDK8（单 JDK：反序列化利用链对新 JDK 兼容差）----------
+# ---------- 6. SDKMAN JDK8（单 JDK；slim 装 fx 变体后剔除 JavaFX 产物，省 ~100MB）----------
+# zulu8 在 SDKMAN 仅有 fx 整合变体（无非 fx 版本号），故安装后按文件名剔除
+# JavaFX：jfxrt.jar 与 libjfx*/libdecora* native。反射利用链（ysoserial/
+# JNDIExploit/gsl5/mdut）不触 JavaFX，剔除不影响。
 RUN curl -s "https://get.sdkman.io" | bash && \
     bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
               sdk install java ${JDK8} && \
               sdk default java ${JDK8}' && \
+    find "$HOME/.sdkman/candidates/java/current" \( -iname "*jfx*" -o -iname "javafx*" \) \
+      \( -name "*.jar" -o -name "*.so" -o -name "*.diz" \) -delete && \
     rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
 # 登录 shell（bash -l）会被 /etc/profile 重写 PATH 丢掉 java——补 source sdkman-init；
 # git 全局身份避免 agent 仓库分析时 commit 因身份缺失被拒
