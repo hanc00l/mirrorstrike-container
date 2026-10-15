@@ -1,6 +1,6 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（tsec-hosted 仅 URL+SHA256 锁定的 pinned 资产例外）、**单 JDK8**，重量级工具与 nuclei 模板经运行时挂载提供。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（tsec-hosted 仅 URL+SHA256 锁定的 pinned 资产例外）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级工具与 nuclei 模板经运行时挂载提供。
 
 ## 镜像变体
 
@@ -25,7 +25,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 | 零预装字典 | seclists/dirb/wordlists(rockyou) 不随镜像，由平台 `dicts/` 能力同步承担（两镜像同）|
 | 零 GitHub 下载 | 构建期无任何 GitHub release / git clone 依赖；nuclei/naabu 用 Kali 源版本 |
 | AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底）|
-| 单 JDK8 | SDKMAN Zulu；ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
+| 单 JDK8 | SDKMAN Zulu（交互/Agent 面唯一 JDK）；jadx 经 wrapper 绑定 apt JVM 运行，ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
 | playwright 默认内置 | apt chromium + npm playwright/@playwright/mcp，经平台 `mcp/mcp.json`（`--executable-path /usr/bin/chromium`）接线 |
 | sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
 | 无 server 端组件 | 不装 postgresql/redis-server/tini；PG/Redis 由平台侧提供 |
