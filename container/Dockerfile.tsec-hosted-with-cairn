@@ -1,0 +1,292 @@
+# =============================================================================
+# Dockerfile.tsec-hosted — tsec 托管镜像唯一最终版（2026-10-15 收敛）
+#
+# all-in-one 托管仿真（含 PG/Redis server 端，ENTRYPOINT=tini）。要点：
+#   - 体积收敛：去 qemu-user/-static（~780MB）、chisel 换 pinned 单架构 deb、
+#     JDK8 fx 变体安装后剔除 JavaFX（~100MB）、零预装字典（平台 dicts/ 承担）
+#   - 工具面增补 / 排除项 / 门控 ARG 的逐项对照与裁决依据见 AGENTS.md
+#   - 构建统一走 mirrorstrike deploy/hosted/build-image.sh（3GB 压缩门禁在脚本内）
+# 仅用于托管仿真环境。
+# =============================================================================
+FROM --platform=amd64 kalilinux/kali-rolling:latest
+
+# ---------- 版本号集中管理（改版本只动这里）----------
+ARG JDK8=8.0.482.fx-zulu
+# 浏览器层（chromium + playwright npm）默认开；--build-arg WITH_PLAYWRIGHT=0 关闭
+ARG WITH_PLAYWRIGHT=1
+# 云 CLI 族（awscli/trivy）：d 类红区题面拍板后再开
+ARG WITH_CLOUD=0
+# exploitdb（searchsploit，~60MB）默认开；--build-arg WITH_EXPLOITDB=0 关闭
+ARG WITH_EXPLOITDB=1
+# kubectl（~55MB，dict-base 清单硬承诺）默认开
+ARG WITH_KUBECTL=1
+
+# pinned 增补资产（URL+SHA256 构建期校验，升级须同步更新）
+ARG CHISEL_URL=https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.deb
+ARG CHISEL_SHA256=0c7e4abb892faca44dbc9b7363af27e3859b68492e10771fea446fd5e8535e5d
+ARG GRPCURL_URL=https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_amd64.deb
+ARG GRPCURL_SHA256=0710dc05a28f1fac2230fd438c1fc61b90e0431809372a65aea4b53a57947451
+
+# Android 逆向 pinned 资产（与 mirrorstrike deploy/reverse-static/tool-lock.json 一致）
+ARG ANDROID_JDK_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
+ARG ANDROID_JDK_SHA256=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
+ARG JADX_URL=https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar
+ARG APKTOOL_SHA256=eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd
+ARG CAPA_URL=https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip
+ARG CAPA_SHA256=07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4
+
+ENV TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    MS_RUN_MODE=hosted \
+    NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
+
+# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror）----------
+RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+# ---------- 2. apt 工具大合并（渗透 + CTF + Pwn，显式最小清单，无元包/无审计/无 metasploit）----------
+# 与完整版 Dockerfile 的逐项差异见 AGENTS.md「预装工具清单」表。要点：
+#   - 去 qemu-user/-static/libc6-dbg（跨架构仿真不做，省 ~780MB）
+#   - libc6-dev 须显式安装：gcc 对它仅是 Recommends，会被 --no-install-recommends
+#     剥离（PWN 本地编译链刚需）
+#   - 去 chisel-common-binaries，chisel 由 §2b pinned 单架构 deb 补回
+#   - 零预装字典（平台 dicts/ 承担）；dnsrecon 保留（DNS 枚举工具本体）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bsdextrautils npm jq yq curl wget ca-certificates git tini \
+      openssh-client iputils-ping tmux strace procps iproute2 \
+      postgresql redis-server \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
+      dnsrecon \
+      hydra john hashid fcrackzip gitleaks \
+      default-mysql-client \
+      python3-impacket evil-winrm netexec smbclient \
+      enum4linux-ng bloodyad coercer proxychains4 sshpass \
+      netcat-openbsd ncat socat tcpdump tshark dnsutils whois \
+      gdb gdb-multiarch radare2 yara ltrace binutils xxd binwalk foremost steghide exiftool \
+      unzip zip p7zip-full unrar-free xz-utils patchelf \
+      python3 python3-pip python3-venv python3-paramiko \
+      gcc libc6-dev make ruby sudo less vim-tiny file \
+      bc sqlite3 ripgrep fd-find php-cli \
+      tesseract-ocr tesseract-ocr-chi-sim \
+      wafw00f whatweb checksec rlwrap iputils-arping ldap-utils \
+      adb apksigner zipalign aapt \
+      python3-numpy python3-sympy python3-pil python3-lxml \
+      python3-jwt python3-pymongo python3-psycopg2 python3-pymysql && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+# pg8000（dict-base 清单）无 apt 包：pip 单包补齐，失败不阻断（非核心依赖）
+RUN pip3 install --no-cache-dir pg8000 || echo "[warn] pg8000 pip 安装失败，非核心依赖，继续构建"
+# 数据库客户端：mysql 走 default-mysql-client（仅客户端）；redis-cli / psql 分别随
+# redis-server / postgresql 服务端依赖带入
+
+# ---------- 2b. pinned 单架构工具：chisel + grpcurl（替换 chisel-common-binaries，-~110MB）----------
+RUN set -eux; \
+    curl -fsSL -o /tmp/chisel.deb "${CHISEL_URL}"; \
+    echo "${CHISEL_SHA256}  /tmp/chisel.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/chisel.deb; \
+    curl -fsSL -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
+    echo "${GRPCURL_SHA256}  /tmp/grpcurl.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/grpcurl.deb; \
+    rm -f /tmp/chisel.deb /tmp/grpcurl.deb; \
+    chisel --version; grpcurl --version
+
+# ---------- 2b+. 增补兼容软链：Debian 系 fd-find 二进制名为 fdfind，补 fd 别名 ----------
+RUN command -v fdfind >/dev/null 2>&1 && ln -sf "$(command -v fdfind)" /usr/local/bin/fd; \
+    command -v rg >/dev/null 2>&1; command -v fd >/dev/null 2>&1
+
+# ---------- 2b*. nmap 入口修复（仅托管模式需要；round-3/4 实测报错收口）----------
+# Kali 打包的 nmap 真实二进制带 file caps（含 cap_net_admin），托管任务容器非 root
+# 无 effective CAP_NET_RAW，且 cap_net_admin 超出 Docker 默认 bounding set → exec
+# EPERM / "Operation not permitted"；Kali wrapper 又对非 root 传 --privileged，
+# 关闭了 nmap 的自动降级。修复：
+#   - setcap 削掉 cap_net_admin（保留 raw+bind_service），exec 子集校验恒通过；
+#   - /usr/local/bin 覆盖入口（PATH 优先于 /usr/bin）：root 沿用原逻辑；非 root 强制
+#     --unprivileged，自动降级 connect 扫描，-sS 给出明确的 requires-root 语义。
+# 平台常规 capability 档（root+CAP ALL）不受影响，完整版 Dockerfile 无需此修复。
+RUN setcap cap_net_raw,cap_net_bind_service=eip /usr/lib/nmap/nmap && \
+    printf '%s\n' '#!/usr/bin/env sh' 'set -e' \
+      '# tsec-hosted nmap 入口：root 沿用原逻辑；非 root 强制 --unprivileged 自动降级 connect 扫描' \
+      'if [ "$(id -u)" -eq 0 ]; then exec /usr/lib/nmap/nmap "$@"; fi' \
+      'exec /usr/lib/nmap/nmap --unprivileged "$@"' > /usr/local/bin/nmap && \
+    chmod 0755 /usr/local/bin/nmap && \
+    nmap --version | head -1
+
+# ---------- 2c. 可选层：exploitdb（searchsploit）/ 云 CLI 族 ----------
+RUN set -eux; \
+    if [ "$WITH_EXPLOITDB" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends exploitdb && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_CLOUD" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends awscli trivy && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_KUBECTL" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends kubectl && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    command -v kubectl || echo "[warn] kubectl 未启用（WITH_KUBECTL=0）"; \
+    kubectl version --client=true 2>/dev/null | head -1 || true
+
+# ---------- 3. pip / gem（Pwn + CTF 必备；semgrep 有意排除）----------
+# Python 工具优先取 Kali apt 发行版包（避免 pip 在新 Python 下回溯老版本源码包）。
+# ropper 不装：依赖 filebytes 用到 Python 3.12+ 已移除的 ast.Str，本底座不可构建；
+# ROPgadget + pwntools ROP 已覆盖。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3-pwntools python3-ropgadget python3-z3 \
+      python3-pycryptodome python3-requests python3-bs4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    gem install one_gadget --no-document
+
+# ---------- 4. AI 执行器：仅 pi-coding-agent ----------
+# @modelcontextprotocol/sdk 为 pi 扩展裸导入的解析兜底；pi-agent 工作区自带的
+# node_modules 由 build-image.sh 组装。
+RUN npm install -g @earendil-works/pi-coding-agent @modelcontextprotocol/sdk
+
+# Node 版本门（pi-coding-agent 要求 >= 22.19）+ pi CLI 冒烟
+RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
+    pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
+
+# ---------- 5. 可选浏览器层（默认开；--build-arg WITH_PLAYWRIGHT=0 关闭）----------
+RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
+      apt-get clean && rm -rf /var/lib/apt/lists/* && \
+      npm install -g playwright @playwright/mcp; \
+      # playwright-cli wrapper：固定系统 Chromium 免下载，浏览器自动化统一入口
+      printf '%s\n' '#!/bin/sh' \
+        '# 浏览器自动化统一入口（dict-base AGENTS.md 对齐）：系统 Chromium，免下载浏览器' \
+        'export PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium' \
+        'exec playwright "$@"' > /usr/local/bin/playwright-cli; \
+      chmod 0755 /usr/local/bin/playwright-cli; \
+    fi; \
+    playwright-cli --version >/dev/null 2>&1 || echo "[warn] 浏览器层未启用（WITH_PLAYWRIGHT=0），playwright-cli 缺席"
+
+# ---------- 6. SDKMAN JDK8（单 JDK；fx 变体安装后剔除 JavaFX 产物，省 ~100MB）----------
+# zulu8 在 SDKMAN 仅有 fx 整合变体；反射利用链不触 JavaFX，剔除不影响。
+# curl 落盘 + fail-fast：管道模式（curl | bash）会静默吞掉失败导致 sdkman-init 缺失。
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      "https://get.sdkman.io" -o /tmp/sdkman-install.sh; \
+    bash /tmp/sdkman-install.sh; \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
+              sdk install java ${JDK8} && \
+              sdk default java ${JDK8}'; \
+    find "$HOME/.sdkman/candidates/java/current" \( -iname "*jfx*" -o -iname "javafx*" \) \
+      \( -name "*.jar" -o -name "*.so" -o -name "*.diz" \) -delete && \
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/* /tmp/sdkman-install.sh
+# 登录 shell（bash -l）会丢 sdkman java——.profile 补 source；git 全局身份供 agent 提交
+RUN echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /root/.profile && \
+    git config --global user.email "agent@mirrorstrike" && \
+    git config --global user.name "mirrorstrike-agent"
+ENV JAVA_HOME=/root/.sdkman/candidates/java/current
+ENV PATH=/root/.sdkman/candidates/java/current/bin:${PATH}
+
+# ---------- 6b. Android 逆向层：jadx + apktool + jlink 裁剪 JRE ----------
+# jadx/apktool 要求 JDK>=11；默认 JDK8（反射链刚需）不动，wrapper 显式指向
+# /opt/tools/android/jre，双 JAVA_HOME 互不污染。JRE 由 jlink 按 jdeps 依赖裁剪
+#（失败回退固定模块集），体积远小于整装 JDK。
+RUN set -eux; \
+    mkdir -p /tmp/android-build /opt/tools/android; \
+    curl -fsSL -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
+    echo "${ANDROID_JDK_SHA256}  /tmp/jdk21.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/jdk21.tar.gz -C /tmp/android-build; \
+    curl -fsSL -o /tmp/jadx.zip "${JADX_URL}"; \
+    echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c -; \
+    unzip -q /tmp/jadx.zip -d /opt/tools/android/jadx; \
+    curl -fsSL -o /opt/tools/android/apktool.jar "${APKTOOL_URL}"; \
+    echo "${APKTOOL_SHA256}  /opt/tools/android/apktool.jar" | sha256sum -c -; \
+    jdk21_dir="$(find /tmp/android-build -maxdepth 1 -type d -name 'jdk-21*' | head -1)"; \
+    mods="$("${jdk21_dir}/bin/jdeps" --print-module-deps --ignore-missing-deps \
+      /opt/tools/android/jadx/lib/*.jar /opt/tools/android/apktool.jar 2>/dev/null || true)"; \
+    if [ -z "${mods}" ]; then \
+      mods="java.base,java.logging,java.xml,java.naming,java.desktop,java.management,java.sql,java.net.http,jdk.unsupported,jdk.crypto.ec,jdk.zipfs"; \
+    fi; \
+    echo "android JRE modules: ${mods}"; \
+    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-files \
+      --compress zip-6 --output /opt/tools/android/jre; \
+    rm -rf /tmp/jdk21.tar.gz /tmp/jadx.zip /tmp/android-build; \
+    printf '%s\n' '#!/bin/sh' \
+      '# R1-T2：android 工具显式指向裁剪 JRE（默认 java 仍为 JDK8，互不污染）' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'export PATH="/opt/tools/android/jre/bin:${PATH}"' \
+      'exec /opt/tools/android/jadx/bin/jadx "$@"' > /usr/local/bin/jadx; \
+    printf '%s\n' '#!/bin/sh' \
+      'export JAVA_HOME=/opt/tools/android/jre' \
+      'exec /opt/tools/android/jre/bin/java -jar /opt/tools/android/apktool.jar "$@"' > /usr/local/bin/apktool; \
+    chmod 0755 /usr/local/bin/jadx /usr/local/bin/apktool; \
+    /usr/local/bin/jadx --version; \
+    /usr/local/bin/apktool --version
+
+# ---------- 6c. capa：恶意软件能力识别单二进制 + 离线规则 ----------
+# 规则随镜像（禁联网更新，对齐 nuclei 模板处理）；capa 默认在二进制同级 rules/ 找规则。
+RUN set -eux; \
+    mkdir -p /opt/tools/capa; \
+    curl -fsSL -o /tmp/capa.zip "${CAPA_URL}"; \
+    echo "${CAPA_SHA256}  /tmp/capa.zip" | sha256sum -c -; \
+    unzip -q /tmp/capa.zip -d /tmp/capa-unpack; \
+    capa_bin="$(find /tmp/capa-unpack -type f -name capa | head -1)"; \
+    install -m 0755 "${capa_bin}" /opt/tools/capa/capa; \
+    ln -sf /opt/tools/capa/capa /usr/local/bin/capa; \
+    git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/tools/capa/rules; \
+    rm -rf /opt/tools/capa/rules/.git /tmp/capa.zip /tmp/capa-unpack; \
+    capa --version
+
+# ---------- 7. nuclei 离线模板指向镜像内路径（禁联网更新）----------
+RUN mkdir -p /root/.config/nuclei && \
+    printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/nuclei-templates' \
+      > /root/.config/nuclei/config.yaml
+
+# ---------- 8. 目录占位（运行时挂载点：本地仿真 bind mount）----------
+# logs/ 不预置：entrypoint 运行时自建，预置空目录会被密钥扫描规则误命中
+RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
+                 /opt/mirrorstrike/state /opt/mirrorstrike/pi-agent/agents
+
+# ---------- 9. 离线工具（--build-context tools-deepstrike：/opt/tools 托管裁剪子集 + deepstrike-kit）----------
+# tools-deepstrike 镜像含完整 /opt/tools；shiro_attack / yak-engine / info-gather
+# 不进镜像（方案 §4.5.2）
+COPY --from=tools-deepstrike /opt/tools/frp          /opt/tools/frp
+COPY --from=tools-deepstrike /opt/tools/fscan        /opt/tools/fscan
+COPY --from=tools-deepstrike /opt/tools/gsl5-cli     /opt/tools/gsl5-cli
+COPY --from=tools-deepstrike /opt/tools/mdut-cli     /opt/tools/mdut-cli
+COPY --from=tools-deepstrike /opt/tools/JNDIExploit  /opt/tools/JNDIExploit
+COPY --from=tools-deepstrike /opt/tools/ysoserial    /opt/tools/ysoserial
+COPY --from=tools-deepstrike /opt/tools/suo5         /opt/tools/suo5
+# deepstrike-kit（MCP 入口；yak 通道随 yak-engine 缺席降级，gsl5/mdut bash 技能兜底）
+COPY --from=tools-deepstrike /opt/deepstrike         /opt/deepstrike
+
+# ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
+COPY kb/nuclei-templates/   /opt/kb/nuclei-templates/
+COPY kb/Vulnerability-Wiki/ /opt/kb/Vulnerability-Wiki/
+COPY knowledge/             /opt/mirrorstrike/knowledge/
+
+# ---------- 11. 应用树（主上下文：能力文件 + pi-agent 工作区 + hosted 配置/脚本）----------
+COPY app/                   /opt/mirrorstrike/
+
+# ---------- 11b. Cairn solver runtime（同容器双 solver 变体）----------
+# 构建上下文需包含 app/cairn-src/cairn/；该目录由 deploy/hosted/build-image.sh
+# 从 Cairn 源码目录复制而来。Cairn 使用独立 venv 与独立运行目录，避免和 MS
+# 的 pi-agent 工作区、会话目录及 MCP 配置互相污染。
+RUN set -eux; \
+    test -f /opt/mirrorstrike/cairn-src/cairn/pyproject.toml; \
+    python3 -c 'import sys; sys.exit("Cairn requires Python >= 3.12, got " + sys.version.split()[0]) if sys.version_info < (3, 12) else None'; \
+    python3 -m venv /opt/mirrorstrike/cairn-venv; \
+    /opt/mirrorstrike/cairn-venv/bin/pip install --no-cache-dir /opt/mirrorstrike/cairn-src/cairn; \
+    mkdir -p /opt/mirrorstrike/cairn/state \
+             /opt/mirrorstrike/cairn/workspace \
+             /opt/mirrorstrike/cairn/pi-agent \
+             /opt/mirrorstrike/cairn/logs; \
+    chown -R kali:kali /opt/mirrorstrike/cairn /opt/mirrorstrike/cairn-venv
+
+# Go 二进制（构建编排方宿主机编译，随主上下文 bin/ 提供）
+COPY bin/                   /opt/mirrorstrike/bin/
+
+WORKDIR /opt/mirrorstrike
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/mirrorstrike/deploy/hosted/entrypoint.sh"]
+CMD ["run"]
