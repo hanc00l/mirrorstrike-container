@@ -12,6 +12,8 @@ FROM --platform=amd64 kalilinux/kali-rolling:latest
 
 # ---------- 版本号集中管理（改版本只动这里）----------
 ARG JDK8=8.0.482.fx-zulu
+# pi 执行器版本锁定：双 solver 对齐 Cairn 契约（pi 1.1.x）；裸装会随 npm latest 漂移
+ARG PI_VERSION=1.1.0
 # 浏览器层（chromium + playwright npm）默认开；--build-arg WITH_PLAYWRIGHT=0 关闭
 ARG WITH_PLAYWRIGHT=1
 # 云 CLI 族（awscli/trivy）：d 类红区题面拍板后再开
@@ -147,11 +149,13 @@ RUN apt-get update && \
 # ---------- 4. AI 执行器：仅 pi-coding-agent ----------
 # @modelcontextprotocol/sdk 为 pi 扩展裸导入的解析兜底；pi-agent 工作区自带的
 # node_modules 由 build-image.sh 组装。
-RUN npm install -g @earendil-works/pi-coding-agent @modelcontextprotocol/sdk
+RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} @modelcontextprotocol/sdk
 
 # Node 版本门（pi-coding-agent 要求 >= 22.19）+ pi CLI 冒烟
 RUN node -e 'const [maj, min] = process.versions.node.split(".").map(Number); if (maj < 22 || (maj === 22 && min < 19)) { console.error("[fatal] pi-coding-agent 需要 Node >= 22.19，当前 " + process.versions.node); process.exit(1); }' && \
     pi --version >/dev/null || { echo "[fatal] pi 不可用"; exit 1; }
+# 版本锁定不是自证的：断言实际安装版本等于 PI_VERSION（Cairn bench-base §13 同款做法）
+RUN test "$(pi --version)" = "${PI_VERSION}" || { echo "[fatal] pi 版本漂移: $(pi --version) != ${PI_VERSION}"; exit 1; }
 
 # ---------- 5. 可选浏览器层（默认开；--build-arg WITH_PLAYWRIGHT=0 关闭）----------
 RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
