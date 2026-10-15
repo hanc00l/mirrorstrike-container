@@ -21,7 +21,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - **完整版**（`container/Dockerfile`）：四场景显式最小清单。2026-10-15 起同样**不预装任何字典**（seclists/dirb/rockyou 已移除）
 - **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：**唯一最终版**（2026-10-15 由原基线与 slim 精简变体合并收敛，slim 文件已删除）。要点：
   - 体积收敛：去 qemu-user/-static（~780MB，跨架构 PWN 仿真不做）、chisel-common-binaries → pinned 单架构 chisel deb（URL+SHA256 锁定）、JDK8 fx 变体安装后剔除 JavaFX（~100MB，反射链不触）
-  - **零预装字典**（2026-10-15 契约）：seclists（实测 1,861MB）/dirb/wordlists(rockyou)/dnsrecon 全部移出 apt；字典由 mirrorstrike 平台字典库 `dicts/`（应用树随 `app/` COPY 进镜像）承担，Worker 物化到任务工作区，skills 按任务相对路径引用保证一致性
+  - **零预装字典**（2026-10-15 契约）：seclists（实测 1,861MB）/dirb/wordlists(rockyou) 全部移出 apt（dnsrecon 为 DNS 枚举工具本体，保留）；字典由 mirrorstrike 平台字典库 `dicts/`（应用树随 `app/` COPY 进镜像）承担，Worker 物化到任务工作区，skills 按任务相对路径引用保证一致性
   - 工具面对齐 dict-base AGENTS.md 预装清单：安卓链 adb/apksigner/zipalign/aapt、make/zip、python 科学库（numpy/sympy/Pillow/lxml/PyJWT/pymongo/psycopg2/pymysql，pg8000 走 pip）、bc/sqlite3/ripgrep/fd-find/php-cli/tesseract/wafw00f/whatweb/checksec/rlwrap/ncat/arping/ldap-utils、exploitdb（`WITH_EXPLOITDB=0` 可关）、grpcurl（pinned deb）、`playwright-cli` wrapper（固定系统 Chromium）
   - 门控：`WITH_KUBECTL=1`（kubectl，dict-base 硬承诺）/ `WITH_CLOUD=0`（awscli/trivy，d 类红区题面拍板后再开）/ `WITH_PLAYWRIGHT=1`（浏览器层默认开）
   - 排除项（缺失即预期）：qemu-user/-static、hashcat（无 GPU，john 覆盖）、ghidra、metasploit、semgrep、ropper、nikto、dirsearch、一切预装字典

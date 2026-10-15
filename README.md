@@ -6,9 +6,8 @@
 
 | 变体 | 标签 | 用途 | 大小（估算）|
 |------|------|------|------------|
-| **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~6.5 GB（未压缩，seclists 字典为主）|
-| **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis），仅用于托管仿真环境 | ~7.4 GB 未压缩 / ~2.77 GB 压缩（<3GB 预算）|
-| **tsec 托管精简版** | - | tsec-hosted 精简+增补变体：去 qemu-user/static（跨架构仿真不做）与全架构 chisel（换 pinned 单架构 deb）、JDK8 剔除 JavaFX；按 venom 会话缺口统计增补 bc/sqlite3/rg+fd/php-cli/tesseract-ocr/wafw00f/whatweb/checksec/exploitdb/searchsploit/grpcurl 等；云 CLI 族经 `--build-arg WITH_CLOUD=0` 默认关。构建编排同基线，仅 `-f` 换本文件 | 未压缩 ~6.5 GB（估算，较基线省 ~1GB，未实测）|
+| **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~4.6 GB 未压缩（2026-10-15 零预装字典后估算，未实测）|
+| **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis server 端），仅用于托管仿真环境。**唯一最终版**：2026-10-15 由原基线与 slim 合并收敛（slim 文件已删除），体积收敛史与排除项见文件头 | ~4.9 GB 未压缩（估算，未实测）/ 压缩 <3 GB（build-image.sh 3GB 门禁强制）|
 
 ## 快速开始
 
@@ -56,13 +55,13 @@ Worker 设置为 `/opt/mirrorstrike/pi-agent`。镜像无 ENTRYPOINT——平台
 nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools` 挂载提供
 
 ### CTF
-pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremost、steghide、exiftool、requests、beautifulsoup4
+pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremost、steghide、exiftool、hashid、fcrackzip、requests、beautifulsoup4
 
 ### 代码审计
 semgrep（`~/.local/bin`）、gitleaks、nuclei（DAST）
 
 ### Pwn 与逆向
-gdb + gdb-multiarch、strace、radare2、yara、patchelf、qemu-user / qemu-user-static、ROPgadget、one_gadget、libc6-dbg；ghidra/jadx/apktool/capa 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载
+gdb + gdb-multiarch、strace、radare2、yara、patchelf、qemu-user / qemu-user-static、ROPgadget、one_gadget、libc6-dbg、jadx、apktool（Kali apt 版，jadx 经 wrapper 绑定 apt JVM）；ghidra/capa 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载
 
 ### AI 代理与浏览器
 - [pi-coding-agent](https://github.com/earendil-works/pi-mono)（`pi` CLI；Node >= 22.19，构建期有版本断言）
