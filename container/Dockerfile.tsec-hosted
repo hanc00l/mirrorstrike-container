@@ -96,7 +96,7 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #   - 去 chisel-common-binaries（全架构静态包 121MB），chisel 由 §2b pinned deb 单架构补回
 #   - 增补：bc sqlite3 ripgrep fd-find php-cli tesseract-ocr tesseract-ocr-chi-sim
 #     wafw00f whatweb checksec rlwrap ncat iputils-arping ldap-utils
-# whatweb/nikto/dirsearch 基线明确不装——slim 按 2026-10-14 缺口文档补回 whatweb
+# whatweb/nikto/dirsearch 基线明确不装——本镜像按 2026-10-14 缺口文档补回 whatweb
 # （e1 WAF 指纹黄区，~2MB）；nikto/dirsearch 仍不装（nmap+sqlmap+gobuster/ffuf+nuclei 覆盖 web 面）
 # 字典（2026-10-15 架构调整）：镜像不再预装任何字典——seclists(全套 1.8GB) /
 # dirb(quick|common) / wordlists(rockyou) 已移除。字典由平台 dicts/ 能力同步承担
@@ -204,17 +204,23 @@ RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
     fi; \
     playwright-cli --version >/dev/null 2>&1 || echo "[warn] 浏览器层未启用（WITH_PLAYWRIGHT=0），playwright-cli 缺席"
 
-# ---------- 6. SDKMAN JDK8（单 JDK；slim 装 fx 变体后剔除 JavaFX 产物，省 ~100MB）----------
+# ---------- 6. SDKMAN JDK8（单 JDK；fx 整合变体安装后剔除 JavaFX 产物，省 ~100MB）----------
 # zulu8 在 SDKMAN 仅有 fx 整合变体（无非 fx 版本号），故安装后按文件名剔除
 # JavaFX：jfxrt.jar 与 libjfx*/libdecora* native。反射利用链（ysoserial/
 # JNDIExploit/gsl5/mdut）不触 JavaFX，剔除不影响。
-RUN curl -s "https://get.sdkman.io" | bash && \
+# curl 带 --retry：sdkman 域名（get/cdn）直连与代理路线均偶发抖动，安装器管道
+# 模式（curl | bash）会静默吞掉失败导致 sdkman-init 缺失——改落盘 + fail-fast
+#（与完整版 Dockerfile 的 322d7d8 同型修复同步）。
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      "https://get.sdkman.io" -o /tmp/sdkman-install.sh; \
+    bash /tmp/sdkman-install.sh; \
     bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
               sdk install java ${JDK8} && \
-              sdk default java ${JDK8}' && \
+              sdk default java ${JDK8}'; \
     find "$HOME/.sdkman/candidates/java/current" \( -iname "*jfx*" -o -iname "javafx*" \) \
       \( -name "*.jar" -o -name "*.so" -o -name "*.diz" \) -delete && \
-    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/*
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/* /tmp/sdkman-install.sh
 # 登录 shell（bash -l）会被 /etc/profile 重写 PATH 丢掉 java——补 source sdkman-init；
 # git 全局身份避免 agent 仓库分析时 commit 因身份缺失被拒
 RUN echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /root/.profile && \
