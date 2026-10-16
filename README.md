@@ -1,12 +1,12 @@
 # mirrorstrike-container
 
-基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（tsec-hosted 仅 URL+SHA256 锁定的 pinned 资产例外）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级工具与 nuclei 模板经运行时挂载提供。
+基于 Kali Linux 的 MirrorStrike Docker 容器环境，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（两镜像仅允许 URL+SHA256 锁定的 pinned 资产例外）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级工具与 nuclei 模板经运行时挂载提供。
 
 ## 镜像变体
 
 | 变体 | 标签 | 用途 | 大小（估算）|
 |------|------|------|------------|
-| **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）| ~4.6 GB 未压缩（2026-10-15 零预装字典后估算，未实测）|
+| **完整版** | `latest` | 四场景显式最小清单（渗透 + CTF + 审计 + Pwn）；**2026-10-16 起为 tsec-hosted 工具面超集**（无 server 端组件、数据库客户端完整直装）| ~5 GB 未压缩（2026-10-16 工具面收敛后估算，未实测）|
 | **tsec 托管版** | - | tsecbench 托管 all-in-one（内置 PG/Redis server 端），仅用于托管仿真环境。**唯一最终版**：2026-10-15 由原基线与 slim 合并收敛（slim 文件已删除）；含 nmap 入口修复（setcap 削 `cap_net_admin` + 非 root 强制 `--unprivileged`），逐项对照、体积收敛史与排除项见 [AGENTS.md](AGENTS.md) | ~4.9 GB 未压缩（估算，未实测）/ 压缩 <3 GB（build-image.sh 3GB 门禁强制）|
 
 ## 快速开始
@@ -23,12 +23,12 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 |------|------|
 | 显式最小 apt 清单 | 无元包、无 metasploit，按四场景显式列出工具 |
 | 零预装字典 | seclists/dirb/wordlists(rockyou) 不随镜像，由平台 `dicts/` 能力同步承担（两镜像同）|
-| 零 GitHub 下载 | 构建期无任何 GitHub release / git clone 依赖；nuclei/naabu 用 Kali 源版本 |
-| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（+ MCP SDK 解析兜底）|
-| 单 JDK8 | SDKMAN Zulu（交互/Agent 面唯一 JDK）；jadx 经 wrapper 绑定 apt JVM 运行，ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
-| playwright 默认内置 | apt chromium + npm playwright/@playwright/mcp，经平台 `mcp/mcp.json`（`--executable-path /usr/bin/chromium`）接线 |
+| 零 GitHub 下载 | 构建期仅允许 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa，与 tsec-hosted 同源同值）；nuclei/naabu 用 Kali 源版本 |
+| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（**版本锁定 1.1.0** + 漂移断言；+ MCP SDK 解析兜底）|
+| 单 JDK8 | SDKMAN Zulu（交互/Agent 面唯一 JDK，安装后剔除 JavaFX）；jadx/apktool 经 wrapper 绑定 `/opt/android/jre`（jlink 裁剪 JRE21，pinned 1.5.6/3.0.2）运行，ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
+| playwright 可选内置 | `WITH_PLAYWRIGHT=1` 默认开：apt chromium + npm playwright/@playwright/mcp + `playwright-cli` wrapper（固定 `/usr/bin/chromium`），经平台 `mcp/mcp.json` 接线 |
 | sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
-| 无 server 端组件 | 不装 postgresql/redis-server/tini；PG/Redis 由平台侧提供 |
+| 无 server 端组件 | 不装 postgresql/redis-server/tini；数据库客户端完整直装（mysql/psql/redis-cli），PG/Redis 服务端由平台侧提供 |
 | /opt 全挂载 | `tools`/`kb`/`workspace`/`deepstrike`/`traffic` 仅建占位目录，运行时 `-v` 注入 |
 
 ## 运行时挂载点
@@ -53,7 +53,7 @@ Worker 设置为 `/opt/mirrorstrike/pi-agent`。镜像无 ENTRYPOINT——平台
 ## 完整版工具链
 
 ### 渗透测试
-nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools` 挂载提供
+nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel、whatweb、wafw00f、searchsploit（exploitdb）、grpcurl、kubectl、数据库客户端（mysql/psql/redis-cli）；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools` 挂载提供
 
 ### CTF
 pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremost、steghide、exiftool、hashid、fcrackzip、requests、beautifulsoup4
@@ -62,7 +62,7 @@ pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremos
 semgrep（`~/.local/bin`）、gitleaks、nuclei（DAST）
 
 ### Pwn 与逆向
-gdb + gdb-multiarch、strace、radare2、yara、patchelf、qemu-user / qemu-user-static、ROPgadget、one_gadget、libc6-dbg、jadx、apktool（Kali apt 版，jadx 经 wrapper 绑定 apt JVM）；ghidra/capa 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载
+gdb + gdb-multiarch、strace、radare2、yara、patchelf、qemu-user / qemu-user-static、ROPgadget、one_gadget、libc6-dbg、jadx 1.5.6 / apktool 3.0.2（pinned + jlink 裁剪 JRE21，落 `/opt/android`）、capa v9.4.0 + 离线规则（落 `/opt/capa`）、adb/apksigner/zipalign/aapt；ghidra 等正式逆向管线由 mirrorstrike `deploy/reverse-static` 专用镜像经 `run_reverse_tool` 承载
 
 ### AI 代理与浏览器
 - [pi-coding-agent](https://github.com/earendil-works/pi-mono)（`pi` CLI；Node >= 22.19，构建期有版本断言）
@@ -74,8 +74,8 @@ pi 扩展经 `pi-agent/extensions/mirrorstrike-mcp.ts` 注册 MCP 工具；镜�
 
 ## JDK 策略（完整版）
 
-- 仅 JDK **8**（Zulu，供 ysoserial 等老反序列化工具）— 由 sdkman 管理，`ENV JAVA_HOME/PATH` 已设，非交互 shell / agent 调用同样生效。
-- 单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差；ghidra 等需要 JDK 21 的工具不在本镜像。
+- 仅 JDK **8**（Zulu，供 ysoserial 等老反序列化工具）— 由 sdkman 管理，`ENV JAVA_HOME/PATH` 已设，非交互 shell / agent 调用同样生效；fx 变体安装后剔除 JavaFX 产物（反射链不触，省 ~100MB）。
+- 单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差；jadx/apktool 经 wrapper 绑定 `/opt/android/jre`（jlink 裁剪 JRE21）运行，与 JDK8 互不污染；ghidra 等需要 JDK 21 的工具不在本镜像。
 
 ## 构建
 
