@@ -99,10 +99,10 @@ RUN pip3 install --no-cache-dir pg8000 || echo "[warn] pg8000 pip 安装失败�
 
 # ---------- 2b. pinned 单架构工具：chisel + grpcurl（替换 chisel-common-binaries，-~110MB）----------
 RUN set -eux; \
-    curl -fsSL -o /tmp/chisel.deb "${CHISEL_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/chisel.deb "${CHISEL_URL}"; \
     echo "${CHISEL_SHA256}  /tmp/chisel.deb" | sha256sum -c -; \
     apt-get install -y --no-install-recommends /tmp/chisel.deb; \
-    curl -fsSL -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
     echo "${GRPCURL_SHA256}  /tmp/grpcurl.deb" | sha256sum -c -; \
     apt-get install -y --no-install-recommends /tmp/grpcurl.deb; \
     rm -f /tmp/chisel.deb /tmp/grpcurl.deb; \
@@ -176,13 +176,13 @@ RUN useradd -m -s /bin/bash kali && \
 # 双 JAVA_HOME 互不污染。JRE 由 jlink 按 jdeps 依赖裁剪（失败回退固定模块集）。
 RUN set -eux; \
     mkdir -p /tmp/android-build /opt/android; \
-    curl -fsSL -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
     echo "${ANDROID_JDK_SHA256}  /tmp/jdk21.tar.gz" | sha256sum -c -; \
     tar -xzf /tmp/jdk21.tar.gz -C /tmp/android-build; \
-    curl -fsSL -o /tmp/jadx.zip "${JADX_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/jadx.zip "${JADX_URL}"; \
     echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c -; \
     unzip -q /tmp/jadx.zip -d /opt/android/jadx; \
-    curl -fsSL -o /opt/android/apktool.jar "${APKTOOL_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /opt/android/apktool.jar "${APKTOOL_URL}"; \
     echo "${APKTOOL_SHA256}  /opt/android/apktool.jar" | sha256sum -c -; \
     jdk21_dir="$(find /tmp/android-build -maxdepth 1 -type d -name 'jdk-21*' | head -1)"; \
     mods="$("${jdk21_dir}/bin/jdeps" --print-module-deps --ignore-missing-deps \
@@ -211,13 +211,17 @@ RUN set -eux; \
 # 落 /opt/capa（/opt/tools 为运行时挂载点不可装物，见 §4b 注）。
 RUN set -eux; \
     mkdir -p /opt/capa; \
-    curl -fsSL -o /tmp/capa.zip "${CAPA_URL}"; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/capa.zip "${CAPA_URL}"; \
     echo "${CAPA_SHA256}  /tmp/capa.zip" | sha256sum -c -; \
     unzip -q /tmp/capa.zip -d /tmp/capa-unpack; \
     capa_bin="$(find /tmp/capa-unpack -type f -name capa | head -1)"; \
     install -m 0755 "${capa_bin}" /opt/capa/capa; \
     ln -sf /opt/capa/capa /usr/local/bin/capa; \
-    git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/capa/rules; \
+    for i in 1 2 3; do \
+      if git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/capa/rules; then break; fi; \
+      rm -rf /opt/capa/rules; sleep 5; \
+    done; \
+    test -d /opt/capa/rules/.git; \
     rm -rf /opt/capa/rules/.git /tmp/capa.zip /tmp/capa-unpack; \
     capa --version
 
