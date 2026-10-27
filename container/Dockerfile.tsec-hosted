@@ -252,18 +252,9 @@ RUN mkdir -p /root/.config/nuclei && \
 RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
                  /opt/mirrorstrike/state /opt/mirrorstrike/pi-agent/agents
 
-# ---------- 9. 离线工具（--build-context tools-deepstrike：/opt/tools 托管裁剪子集 + deepstrike-kit）----------
-# tools-deepstrike 镜像含完整 /opt/tools；shiro_attack / yak-engine / info-gather
-# 不进镜像（方案 §4.5.2）
-COPY --from=tools-deepstrike /opt/tools/frp          /opt/tools/frp
-COPY --from=tools-deepstrike /opt/tools/fscan        /opt/tools/fscan
-COPY --from=tools-deepstrike /opt/tools/gsl5-cli     /opt/tools/gsl5-cli
-COPY --from=tools-deepstrike /opt/tools/mdut-cli     /opt/tools/mdut-cli
-COPY --from=tools-deepstrike /opt/tools/JNDIExploit  /opt/tools/JNDIExploit
-COPY --from=tools-deepstrike /opt/tools/ysoserial    /opt/tools/ysoserial
-COPY --from=tools-deepstrike /opt/tools/suo5         /opt/tools/suo5
-# deepstrike-kit（MCP 入口；yak 通道随 yak-engine 缺席降级，gsl5/mdut bash 技能兜底）
-COPY --from=tools-deepstrike /opt/deepstrike         /opt/deepstrike
+# ---------- 9. 同 tag deepstrike-kit.zip（hosted 安装侧已过滤 optional） ----------
+# 普通 Worker 与 hosted 消费同一份完整 ZIP；shiro_attack 与 info-gather 不进入 hosted。
+COPY runtime-tools/deepstrike-kit /opt/tools/deepstrike-kit
 
 # ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
 COPY kb/nuclei-templates/   /opt/kb/nuclei-templates/

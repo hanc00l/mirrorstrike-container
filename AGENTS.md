@@ -56,7 +56,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 | 集群运维 | `kubectl` | ✅（`WITH_KUBECTL=1` 默认开） | ✅（同左） |
 | Pwn 与二进制分析 | `gdb`、`gdb-multiarch`、`radare2`、`binutils`、`xxd`、`ltrace`、`strace`、`patchelf`、`qemu-user`/`qemu-user-static`、`gcc`、`make`、`checksec`、`libc6-dbg`、`libc6-dev` | ✅（qemu 系 + libc6-dbg 保留——完整版跨架构 Pwn 承诺） | ✅（qemu-user/-static、`libc6-dbg` ❌ 有意排除；`libc6-dev` 已显式安装（gcc 头文件，2026-10-15 补）；`make`/`checksec` ✅） |
 | 逆向（Android / 恶意样本） | `jadx`、`apktool`、`adb`、`apksigner`、`aapt`/`aapt2`、`zipalign`、`capa`、`yara` | ✅（jadx 1.5.6 / apktool 3.0.2 pinned + jlink 裁剪 JRE21 落 `/opt/android`；capa v9.4.0 落 `/opt/capa`） | ✅（同版 pinned，落 `/opt/tools/android`、`/opt/tools/capa`） |
-| Java 反序列化与 JNDI | `ysoserial`、`jndi-injection-exploit` | ❌（运行时挂载 `/opt/tools` 提供） | ✅（裁剪子集 COPY 进镜像 `/opt/tools/{ysoserial,JNDIExploit}`，暂无 `/usr/local/bin` wrapper） |
+| Java 反序列化与 JNDI | `ysoserial`、`jndi-injection-exploit` | ❌（运行时挂载 `/opt/tools/deepstrike-kit` 提供） | ✅（同一 deepstrike-kit.zip 过滤 COPY 到 `/opt/tools/deepstrike-kit`，暂无 `/usr/local/bin` wrapper） |
 | 取证与隐写 | `binwalk`、`foremost`、`steghide`、`exiftool`、`unzip`、`zip`、`7z`、`unrar-free`、`xz` | ✅ | ✅ |
 | 抓包与 DNS 枚举 | `tshark`、`tcpdump`、`dnsutils`、`dnsrecon`、`whois` | ✅ | ✅ |
 | 文件搜索与数据处理 | `rg`、`fd`、`jq`、`yq`、`file`、`bc`、`sqlite3` | ✅ | ✅ |
@@ -97,17 +97,17 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - 安卓链：`adb` / `apksigner` / `zipalign` / `aapt`（round-4 §10 坐实的唯一真缺失）
 - 门控层：`exploitdb`（`WITH_EXPLOITDB=1` 默认开）、`grpcurl`（pinned deb）、`kubectl`（`WITH_KUBECTL=1` 默认开）、`awscli`/`trivy`（`WITH_CLOUD=0` 红区待拍板）
 - 构建配套：`make` / `zip`、python 科学/协议库（numpy/sympy/Pillow/lxml/PyJWT/pymongo/psycopg2/pymysql，pg8000 走 pip 兜底）
-- 入口统一：`playwright-cli` wrapper（固定系统 Chromium，对齐 dict-base 用法）；jadx/apktool 改 pinned GitHub 版 + jlink 裁剪 JRE21；`/opt/tools` 系（frp/fscan/gsl5-cli/mdut-cli/ysoserial/JNDIExploit/suo5/deepstrike）由运行时挂载改为镜像 COPY 裁剪子集
+- 入口统一：`playwright-cli` wrapper（固定系统 Chromium，对齐 dict-base 用法）；jadx/apktool 改 pinned GitHub 版 + jlink 裁剪 JRE21；渗透工具统一由 `deepstrike-kit.zip` 发布，hosted 在安装侧过滤后 COPY 到 `/opt/tools/deepstrike-kit`
 
 ### 复核待办
 
 - ✅ `psmisc`（killall/pstree，~1MB）：2026-10-16 已落入完整版（tsec-hosted 待同步）。
 - ✅ `python3-setuptools`：2026-10-16 已落入完整版（python3-pip 已不传递带入，dict-base 原镜像为显式安装；tsec-hosted 待同步）。
-- tsec-hosted 的 `ysoserial` / `JNDIExploit` 仅有 `/opt/tools` 下 jar，无 `/usr/local/bin` wrapper 命令入口（`jndi-injection-exploit` 式命令不可直接调用）；完整版经 `/opt/tools` 运行时挂载，形态相同。
+- tsec-hosted 的 `ysoserial` / `JNDIExploit` 仅有 `/opt/tools/deepstrike-kit` 下 jar，无 `/usr/local/bin` wrapper 命令入口（`jndi-injection-exploit` 式命令不可直接调用）；完整版经 `/opt/tools/deepstrike-kit` 运行时挂载，形态相同。
 
 ## 关键约定（修改 Dockerfile 必读）
 
-- **运行时挂载点**: `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/deepstrike`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools/deepstrike 只读），**Dockerfile 中不可往里装任何工具**，仅建占位目录并 chown 给 kali。
+- **运行时挂载点**: `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools 只读），不再挂载 `/opt/deepstrike`。完整版的这些目录仅建占位目录并 chown 给 kali，不可往里装工具；tsec-hosted 例外是构建期 COPY 经 catalog 过滤的同一 `deepstrike-kit.zip` 安装内容，不复制旧项目或散落工具目录。
 - **零 GitHub 下载（pinned 资产例外两镜像同）**: 除 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21、capa-rules，升级须同步更新哈希）外，构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新），capa 规则随镜像同禁联网更新（完整版 `/opt/capa/rules`、tsec-hosted `/opt/tools/capa/rules`）。
 - **JDK 策略**: 交互 java 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差。jadx/apktool 两镜像同为 pinned 1.5.6 / 3.0.2 + jlink 裁剪 JRE21，wrapper 显式指向（完整版 `/opt/android/jre`、tsec-hosted `/opt/tools/android/jre`——`/opt/tools` 在完整版为运行时 :ro 挂载点，故另择 `/opt/android`），与 JDK8 互不污染；Kali apt 版 jadx/apktool 及其传递带入的 JVM25（default-jre）依赖链已在完整版移除。ghidra 等 JDK21 工具不在本镜像（走 reverse-static 专用镜像）。
 - **sudo 免密**: 运行用户 kali(uid 1000) 带 `NOPASSWD:ALL` sudo——平台高安全档（`docker_profile=security`）以镜像默认用户运行，低权限工具链依赖 sudo 提权。

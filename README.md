@@ -29,7 +29,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 | playwright 可选内置 | `WITH_PLAYWRIGHT=1` 默认开：apt chromium + npm playwright/@playwright/mcp + `playwright-cli` wrapper（固定 `/usr/bin/chromium`），经平台 `mcp/mcp.json` 接线 |
 | sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
 | 无 server 端组件 | 不装 postgresql/redis-server/tini；数据库客户端完整直装（mysql/psql/redis-cli），PG/Redis 服务端由平台侧提供 |
-| /opt 全挂载 | `tools`/`kb`/`workspace`/`deepstrike`/`traffic` 仅建占位目录，运行时 `-v` 注入 |
+| /opt 全挂载 | `tools`/`kb`/`workspace`/`traffic` 仅建占位目录，运行时 `-v` 注入 |
 
 ## 运行时挂载点
 
@@ -37,10 +37,9 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 
 | 路径 | 用途 |
 |---|---|
-| `/opt/tools` | 第三方工具（fscan/gsl5-cli/mdut-cli/ysoserial/JNDIExploit/suo5/frp 等，只读挂载）|
+| `/opt/tools` | 第一方工具发布根（`deepstrike-kit`、`infor-gather`，只读挂载）|
 | `/opt/kb` | 知识库与 nuclei 模板（`/opt/kb/nuclei-templates`，只读挂载）|
 | `/opt/workspace` | 项目工作区（projects/<pid>，平台按任务目录细粒度挂载）|
-| `/opt/deepstrike` | deepstrike-kit MCP（入口文件存在才挂载，存在性门控）|
 | `/opt/traffic` | 流量存档 |
 | `/opt/mirrorstrike/pi-agent` | pi 执行器共享层（只读；扩展、CLAUDE.md、models.json）|
 | `/opt/mirrorstrike/pi-agent/agents` | pi 会话层（可写，仅会话文件）|
@@ -53,7 +52,7 @@ Worker 设置为 `/opt/mirrorstrike/pi-agent`。镜像无 ENTRYPOINT——平台
 ## 完整版工具链
 
 ### 渗透测试
-nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel、whatweb、wafw00f、searchsploit（exploitdb）、grpcurl、kubectl、数据库客户端（mysql/psql/redis-cli）；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools` 挂载提供
+nmap、masscan、nuclei（模板走 `/opt/kb/nuclei-templates` 挂载）、naabu、sqlmap、gobuster、ffuf、feroxbuster、netexec、coercer、bloodyad、enum4linux-ng、evil-winrm、impacket、smbclient、hydra、john、proxychains4、sshpass、chisel、whatweb、wafw00f、searchsploit（exploitdb）、grpcurl、kubectl、数据库客户端（mysql/psql/redis-cli）；fscan、gsl5-cli、mdut-cli、ysoserial、JNDIExploit、suo5、frp 经 `/opt/tools/deepstrike-kit` 挂载提供
 
 ### CTF
 pwntools、ROPgadget、one_gadget、pycryptodome、z3-solver、binwalk、foremost、steghide、exiftool、hashid、fcrackzip、requests、beautifulsoup4
