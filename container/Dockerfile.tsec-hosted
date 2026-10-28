@@ -45,7 +45,7 @@ ENV TZ=Asia/Shanghai \
     PIP_NO_CACHE_DIR=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     MS_RUN_MODE=hosted \
-    NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
+    NUCLEI_TEMPLATES_DIR=/opt/kb/kb-resource/nuclei-templates
 
 # ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror）----------
 RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
@@ -244,7 +244,7 @@ RUN set -eux; \
 
 # ---------- 7. nuclei 离线模板指向镜像内路径（禁联网更新）----------
 RUN mkdir -p /root/.config/nuclei && \
-    printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/nuclei-templates' \
+    printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/kb-resource/nuclei-templates' \
       > /root/.config/nuclei/config.yaml
 
 # ---------- 8. 目录占位（运行时挂载点：本地仿真 bind mount）----------
@@ -256,10 +256,8 @@ RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
 # shiro_attack 已退役；ysoserial 等独立存量工具不进入当前 ZIP/hosted。
 COPY runtime-tools/deepstrike-kit /opt/tools/deepstrike-kit
 
-# ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
-COPY kb/nuclei-templates/   /opt/kb/nuclei-templates/
-COPY kb/Vulnerability-Wiki/ /opt/kb/Vulnerability-Wiki/
-COPY knowledge/             /opt/mirrorstrike/knowledge/
+# ---------- 10. 知识库（主上下文组装：{kb_dir} 完整视图 = kb-config.yaml + kb-resource 最小化语料 + kb-index 现场重建索引）----------
+COPY kb/                    /opt/kb/
 
 # ---------- 11. 应用树（主上下文：能力文件 + pi-agent 工作区 + hosted 配置/脚本）----------
 COPY app/                   /opt/mirrorstrike/
