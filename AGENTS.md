@@ -56,7 +56,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 | 集群运维 | `kubectl` | ✅（`WITH_KUBECTL=1` 默认开） | ✅（同左） |
 | Pwn 与二进制分析 | `gdb`、`gdb-multiarch`、`radare2`、`binutils`、`xxd`、`ltrace`、`strace`、`patchelf`、`qemu-user`/`qemu-user-static`、`gcc`、`make`、`checksec`、`libc6-dbg`、`libc6-dev` | ✅（qemu 系 + libc6-dbg 保留——完整版跨架构 Pwn 承诺） | ✅（qemu-user/-static、`libc6-dbg` ❌ 有意排除；`libc6-dev` 已显式安装（gcc 头文件，2026-10-15 补）；`make`/`checksec` ✅） |
 | 逆向（Android / 恶意样本） | `jadx`、`apktool`、`adb`、`apksigner`、`aapt`/`aapt2`、`zipalign`、`capa`、`yara` | ✅（jadx 1.5.6 / apktool 3.0.2 pinned + jlink 裁剪 JRE21 落 `/opt/android`；capa v9.4.0 落 `/opt/capa`） | ✅（同版 pinned，落 `/opt/tools/android`、`/opt/tools/capa`） |
-| Java 反序列化与 JNDI | `ysoserial`、`jndi-injection-exploit` | ❌（运行时挂载 `/opt/tools/deepstrike-kit` 提供） | ✅（同一 deepstrike-kit.zip 过滤 COPY 到 `/opt/tools/deepstrike-kit`，暂无 `/usr/local/bin` wrapper） |
+| Java 反序列化与 JNDI | `ysoserial`、`jndi-injection-exploit` | 独立 `/opt/tools/ysoserial` 可选，不属于 kit | 不随当前 ZIP/hosted 分发；JNDIExploit 仍由 kit 提供 |
 | 取证与隐写 | `binwalk`、`foremost`、`steghide`、`exiftool`、`unzip`、`zip`、`7z`、`unrar-free`、`xz` | ✅ | ✅ |
 | 抓包与 DNS 枚举 | `tshark`、`tcpdump`、`dnsutils`、`dnsrecon`、`whois` | ✅ | ✅ |
 | 文件搜索与数据处理 | `rg`、`fd`、`jq`、`yq`、`file`、`bc`、`sqlite3` | ✅ | ✅ |
@@ -103,7 +103,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 - ✅ `psmisc`（killall/pstree，~1MB）：2026-10-16 已落入完整版（tsec-hosted 待同步）。
 - ✅ `python3-setuptools`：2026-10-16 已落入完整版（python3-pip 已不传递带入，dict-base 原镜像为显式安装；tsec-hosted 待同步）。
-- tsec-hosted 的 `ysoserial` / `JNDIExploit` 仅有 `/opt/tools/deepstrike-kit` 下 jar，无 `/usr/local/bin` wrapper 命令入口（`jndi-injection-exploit` 式命令不可直接调用）；完整版经 `/opt/tools/deepstrike-kit` 运行时挂载，形态相同。
+- tsec-hosted 当前不携带独立 `ysoserial`；`JNDIExploit` 由 `/opt/tools/deepstrike-kit` 提供。普通 Worker 如保留独立 `/opt/tools/ysoserial`，只走 bash 路线，均不提供 `/usr/local/bin` wrapper。
 
 ## 关键约定（修改 Dockerfile 必读）
 

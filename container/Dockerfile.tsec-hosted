@@ -252,8 +252,8 @@ RUN mkdir -p /root/.config/nuclei && \
 RUN mkdir -p /opt/tools /opt/kb /opt/workspace /opt/traffic \
                  /opt/mirrorstrike/state /opt/mirrorstrike/pi-agent/agents
 
-# ---------- 9. 同 tag deepstrike-kit.zip（hosted 安装侧已过滤 optional） ----------
-# 普通 Worker 与 hosted 消费同一份完整 ZIP；shiro_attack 与 info-gather 不进入 hosted。
+# ---------- 9. 同 tag deepstrike-kit.zip（hosted 安装侧过滤） ----------
+# shiro_attack 已退役；ysoserial 等独立存量工具不进入当前 ZIP/hosted。
 COPY runtime-tools/deepstrike-kit /opt/tools/deepstrike-kit
 
 # ---------- 10. 知识库（主上下文组装：nuclei-templates 去 .git + Vulnerability-Wiki 仅 Markdown）----------
