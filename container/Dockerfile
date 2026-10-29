@@ -25,7 +25,7 @@ FROM --platform=amd64 kalilinux/kali-rolling:latest
 # ---------- 版本号集中管理（改版本只动这里）----------
 ARG JDK8=8.0.482.fx-zulu
 # pi 执行器版本锁定：与 MS 扩展的 pi 1.1.x 基线对齐；裸装会随 npm latest 漂移
-ARG PI_VERSION=1.1.0
+ARG PI_VERSION=1.4.0
 # 浏览器层（chromium + playwright npm）默认开；--build-arg WITH_PLAYWRIGHT=0 关闭
 ARG WITH_PLAYWRIGHT=1
 # 云 CLI 族（awscli/trivy）：d 类红区题面拍板后再开

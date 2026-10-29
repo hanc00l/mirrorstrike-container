@@ -24,7 +24,7 @@ docker run -it ghcr.io/hanc00l/mirrorstrike-container:latest
 | 显式最小 apt 清单 | 无元包、无 metasploit，按四场景显式列出工具 |
 | 零预装字典 | seclists/dirb/wordlists(rockyou) 不随镜像，由平台 `dicts/` 能力同步承担（两镜像同）|
 | 零 GitHub 下载 | 构建期仅允许 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa，与 tsec-hosted 同源同值）；nuclei/naabu 用 Kali 源版本 |
-| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（**版本锁定 1.1.0** + 漂移断言；+ MCP SDK 解析兜底）|
+| AI 执行器 pi-only | 仅 `@earendil-works/pi-coding-agent`（**版本锁定 1.4.0** + 漂移断言；+ MCP SDK 解析兜底）|
 | 单 JDK8 | SDKMAN Zulu（交互/Agent 面唯一 JDK，安装后剔除 JavaFX）；jadx/apktool 经 wrapper 绑定 `/opt/android/jre`（jlink 裁剪 JRE21，pinned 1.5.6/3.0.2）运行，ghidra 等 JDK21 工具由 reverse 专用镜像承载 |
 | playwright 可选内置 | `WITH_PLAYWRIGHT=1` 默认开：apt chromium + npm playwright/@playwright/mcp + `playwright-cli` wrapper（固定 `/usr/bin/chromium`），经平台 `mcp/mcp.json` 接线 |
 | sudo 免密 | 运行用户 kali(uid 1000)，适配平台高安全档（镜像默认用户 + sudo 提权）|
