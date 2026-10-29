@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # =============================================================================
 # Dockerfile — mirrorstrike agent 执行容器（完整版，四场景）
 #
@@ -59,8 +60,13 @@ ENV TZ=Asia/Shanghai \
     PLAYWRIGHT_MCP_BROWSER=chromium \
     NUCLEI_TEMPLATES_DIR=/opt/kb/nuclei-templates
 
-# ---------- 1. base（固定 apt 源到 kali.download，避免 mirrorbrain 重定向到失效 mirror 如 neusoft）----------
-RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+# ---------- 1. base（固定 apt 源，避免 mirrorbrain 重定向到失效 mirror 如 neusoft）----------
+# 镜像源可配置：默认 kali.download；受限网络（如国内）可用
+# --build-arg KALI_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/kali 加速大包下载
+# （实测 kali.download 对 >50MB 包偶发挂起，tuna/ustc 镜像 5-7MB/s）。
+ARG KALI_MIRROR="http://kali.download/kali"
+RUN rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list && \
+    echo "deb ${KALI_MIRROR} kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
 
 # ---------- 2. apt 工具大合并（渗透 + CTF + 审计 + Pwn + 逆向，显式最小清单）----------
 # 清单 = Dockerfile.tsec-hosted 全量 ∪ 完整版四场景刚需。要点：
@@ -71,8 +77,13 @@ RUN echo "deb http://kali.download/kali kali-rolling main contrib non-free non-f
 #   - 保留完整版 Pwn 承诺：qemu-user/-static、libc6-dbg（tsec-hosted 有意排除，此处保留）
 #   - 复核待办收口：psmisc（killall/pstree）、python3-setuptools（pip 兜底链需要）
 #   - 零预装字典（平台 dicts/ 承担）；dnsrecon 保留（DNS 枚举工具本体）
-RUN apt-get update && \
+# apt 下载缓存 + 重试：Kali 源经代理偶发 502，失败重试可复用已下载 .deb
+# （构建缓存不保留失败层的文件，cache mount 保留；retries 覆盖代理瞬时错误）
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
     apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
       ca-certificates curl wget git sudo less vim-tiny file \
       procps psmisc iproute2 iputils-ping iputils-arping tmux rlwrap libcap2-bin \
       bsdextrautils npm jq yq bc sqlite3 ripgrep fd-find php-cli python3-setuptools \
@@ -150,8 +161,11 @@ RUN set -eux; \
 # apt 依赖闭包自动带上 capstone 等）。
 # ropper 不装：依赖 filebytes 用到 Python 3.12+ 已移除的 ast.Str，本底座不可构建；
 # ROPgadget + pwntools ROP 已覆盖。
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
     apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
       python3-pwntools python3-ropgadget python3-z3 \
       python3-pycryptodome python3-requests python3-bs4 && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
