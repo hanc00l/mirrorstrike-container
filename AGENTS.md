@@ -1,6 +1,6 @@
 # mirrorstrike-container
 
-MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（两镜像仅允许 URL+SHA256 锁定的 pinned 资产例外）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级自研/敏感工具与 nuclei 模板经运行时挂载（`/opt/tools`、`/opt/kb` 等）提供。
+MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（两镜像仅允许 URL+SHA256 锁定的 pinned 资产；capa-rules 规则目录为唯一的 shallow-clone 例外，待固定哈希）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级自研/敏感工具与 nuclei 模板在完整版经运行时挂载（`/opt/tools`、`/opt/kb` 等）提供、在 tsec-hosted 随镜像预置。
 
 ## 项目结构
 
@@ -26,7 +26,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - **tsec 托管版**（`container/Dockerfile.tsec-hosted`）：**唯一最终版**（2026-10-15 由原基线与 slim 精简变体合并收敛，slim 文件已删除）。要点：
   - 体积收敛：去 qemu-user/-static（~780MB，跨架构 PWN 仿真不做）、chisel-common-binaries → pinned 单架构 chisel deb（URL+SHA256 锁定）、JDK8 fx 变体安装后剔除 JavaFX（~100MB，反射链不触）
   - nmap 入口修复（2026-10-15）：`setcap` 削 file caps 的 `cap_net_admin`（exec 子集校验恒过）+ `/usr/local/bin/nmap` wrapper 非 root 强制 `--unprivileged`（security 档自动降级 connect 扫描，消除 "Operation not permitted"/QUITTING——round-3 251 次 / round-4 25 次报错收口）；仅托管模式需要，平台常规 capability 档（root+CAP ALL）nmap 全功能不受影响
-  - **零预装字典**（2026-10-15 契约）：seclists（实测 1,861MB）/dirb/wordlists(rockyou) 全部移出 apt（dnsrecon 为 DNS 枚举工具本体，保留）；字典由 mirrorstrike 平台字典库 `dicts/`（应用树随 `app/` COPY 进镜像）承担，Worker 物化到任务工作区，skills 按任务相对路径引用保证一致性
+  - **零预装系统字典**（2026-10-15 契约）：seclists（实测 1,861MB）/dirb/wordlists(rockyou) 全部移出 apt（dnsrecon 为 DNS 枚举工具本体，保留）；字典由平台 `skills/dicts` 技能承担——tsec 托管镜像随 `app/` 入镜像，普通 Worker 由 `syncSkills` 同步到节点并经 ro 挂载到任务工作区 `dicts/`，Agent 按相对路径引用保证一致性
   - 工具面对齐 dict-base AGENTS.md 预装清单：安卓链 adb/apksigner/zipalign/aapt、make/zip、python 科学库（numpy/sympy/Pillow/lxml/PyJWT/pymongo/psycopg2/pymysql，pg8000 走 pip）、bc/sqlite3/ripgrep/fd-find/php-cli/tesseract/wafw00f/whatweb/checksec/rlwrap/ncat/arping/ldap-utils、exploitdb（`WITH_EXPLOITDB=0` 可关）、grpcurl（pinned deb）、`playwright-cli` wrapper（固定系统 Chromium）
   - 门控：`WITH_KUBECTL=1`（kubectl，dict-base 硬承诺）/ `WITH_CLOUD=0`（awscli/trivy，d 类红区题面拍板后再开）/ `WITH_PLAYWRIGHT=1`（浏览器层默认开）
   - 排除项（缺失即预期）：qemu-user/-static、hashcat（无 GPU，john 覆盖）、ghidra、metasploit、semgrep、ropper、nikto、dirsearch、一切预装字典
@@ -44,7 +44,7 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 ## 预装工具清单（两镜像对照）
 
-> 2026-10-15 按 dict-base《预装工具》清单 + round-4 复盘 §10 逐项核对整理；2026-10-16 完整版重构为 tsec-hosted 工具面超集，下表为重构后对照。`✅`=预装，`❌`=不预装（有意排除与原因见下节），括注差异形态。两镜像均**零预装字典**（平台 `dicts/` 承担）。
+> 2026-10-15 按 dict-base《预装工具》清单 + round-4 复盘 §10 逐项核对整理；2026-10-16 完整版重构为 tsec-hosted 工具面超集，下表为重构后对照。`✅`=预装，`❌`=不预装（有意排除与原因见下节），括注差异形态。两镜像均**零预装系统字典**（平台 `skills/dicts` 技能承担）。
 
 | 用途 | 工具或命令 | Dockerfile（完整版） | Dockerfile.tsec-hosted（tsec 托管版） |
 | --- | --- | --- | --- |
@@ -73,9 +73,9 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 ### 有意排除（缺失即预期）
 
 **两镜像共同**：
-- **一切预装字典**（seclists/dirb/wordlists(rockyou)/PasswordDic）：2026-10-15 契约，由平台 `dicts/` 能力同步、Worker 物化到任务工作区；`dnsrecon` 的字典部分随包移除，DNS 枚举工具本体保留。
+- **一切预装系统字典**（seclists/dirb/wordlists(rockyou)/PasswordDic）：2026-10-15 契约，由平台 `skills/dicts` 技能同步（tsec 托管镜像随 `app/` 入镜像）、docker 以 ro 挂载到任务工作区 `dicts/`；`dnsrecon` 的字典部分随包移除，DNS 枚举工具本体保留。
 - **metasploit / hashcat / nikto / dirsearch**：显式最小清单；web 面由 nmap+sqlmap+gobuster/ffuf/feroxbuster+nuclei 覆盖，口令由 john 覆盖（无 GPU）。
-- **ghidra / pwndbg / katana / dalfox / cloudfox / kerbrute / nuclei-templates 等**：零 GitHub 下载约定（pinned 资产例外除外，见「关键约定」）；ghidra 类 JDK21 逆向管线走 `deploy/reverse-static` 专用镜像 `run_reverse_tool`。
+- **ghidra / pwndbg / katana / dalfox / cloudfox / kerbrute / nuclei-templates 等**：零 GitHub 下载约定（pinned 资产与 capa-rules 例外除外，见「关键约定」）；ghidra 类 JDK21 逆向管线走 `deploy/reverse-static` 专用镜像 `run_reverse_tool`。
 - **ropper**：依赖 filebytes 的 setup.py 使用 Python 3.12+ 移除的 `ast.Str`，本底座不可构建且 Kali 无 apt 包；ROPgadget + pwntools ROP 已覆盖。
 - **docker CLI / docker.sock**：agent 本就运行在任务容器内（round-4 实测 49 次无效探测，靠环境事实注入收敛）。
 
@@ -104,18 +104,19 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 - ✅ `psmisc`（killall/pstree，~1MB）：2026-10-16 已落入完整版（tsec-hosted 待同步）。
 - ✅ `python3-setuptools`：2026-10-16 已落入完整版（python3-pip 已不传递带入，dict-base 原镜像为显式安装；tsec-hosted 待同步）。
 - tsec-hosted 当前不携带独立 `ysoserial`；`JNDIExploit` 由 `/opt/tools/deepstrike-kit` 提供。普通 Worker 如保留独立 `/opt/tools/ysoserial`，只走 bash 路线，均不提供 `/usr/local/bin` wrapper。
+- `capa-rules` 仍未 URL+SHA256 固定（`Dockerfile.tsec-hosted` 当前 `git clone --depth 1`）：建议改为 pinned tarball 或固定 commit，并在构建期校验哈希/提交，收口「零 GitHub 下载」唯一例外。
 
 ## 关键约定（修改 Dockerfile 必读）
 
-- **运行时挂载点**: `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools 只读），不再挂载 `/opt/deepstrike`。完整版的这些目录仅建占位目录并 chown 给 kali，不可往里装工具；tsec-hosted 例外是构建期 COPY 经 catalog 过滤的同一 `deepstrike-kit.zip` 安装内容，不复制旧项目或散落工具目录。
-- **零 GitHub 下载（pinned 资产例外两镜像同）**: 除 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21、capa-rules，升级须同步更新哈希）外，构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新），capa 规则随镜像同禁联网更新（完整版 `/opt/capa/rules`、tsec-hosted `/opt/tools/capa/rules`）。
+- **运行时挂载点**: 完整版的 `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools 只读），不再挂载 `/opt/deepstrike`；这些目录仅建占位目录并 chown 给 kali，不可往里装工具。tsec-hosted 例外：`/opt/tools`、`/opt/kb` 为构建期 COPY 的同一 `deepstrike-kit.zip` 安装内容与最小化语料，`/opt/workspace`、`/opt/traffic` 仍运行时注入，不复制旧项目或散落工具目录。
+- **零 GitHub 下载（pinned 资产例外两镜像同）**: 除 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21，升级须同步更新哈希）外，构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；**唯一例外**：capa-rules 规则目录当前由 `git clone --depth 1` 获取（未 SHA 固定，见「复核待办」）；nuclei 模板指向挂载路径 `/opt/kb/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新），capa 规则随镜像同禁联网更新（完整版 `/opt/capa/rules`、tsec-hosted `/opt/tools/capa/rules`）。
 - **JDK 策略**: 交互 java 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差。jadx/apktool 两镜像同为 pinned 1.5.6 / 3.0.2 + jlink 裁剪 JRE21，wrapper 显式指向（完整版 `/opt/android/jre`、tsec-hosted `/opt/tools/android/jre`——`/opt/tools` 在完整版为运行时 :ro 挂载点，故另择 `/opt/android`），与 JDK8 互不污染；Kali apt 版 jadx/apktool 及其传递带入的 JVM25（default-jre）依赖链已在完整版移除。ghidra 等 JDK21 工具不在本镜像（走 reverse-static 专用镜像）。
 - **sudo 免密**: 运行用户 kali(uid 1000) 带 `NOPASSWD:ALL` sudo——平台高安全档（`docker_profile=security`）以镜像默认用户运行，低权限工具链依赖 sudo 提权。
-- **无 server 端组件**: 不装 postgresql/redis-server/tini 等；PG/Redis 由平台侧提供，容器常驻由 Worker `docker run --init --entrypoint tail -f /dev/null` 实现。
-- **无 ENTRYPOINT**: 镜像只留 `CMD ["/bin/bash"]`；平台 Worker 统一覆盖 entrypoint 常驻容器、经 `docker exec` 拉起 Agent。
+- **无 server 端组件（完整版）**: 不装 postgresql/redis-server/tini 等；PG/Redis 由平台侧提供。平台 Worker 以 `docker run --init --entrypoint tail … -f /dev/null` 拉起容器，生命周期随 Agent 期望：有在途 Agent 时保活，全部退出后回收，Planner 补出后续 Intent 时重建；容器内 tmux/nohup/本地监听不保证跨 Agent 存活。tsec-hosted 是 all-in-one 例外，内置 PG/Redis/tini。
+- **无 ENTRYPOINT（完整版）**: 完整版只留 `CMD ["/bin/bash"]`，平台 Worker 统一覆盖 entrypoint、经 `docker exec` 拉起 Agent；tsec-hosted 使用 `tini + entrypoint.sh` 启动内置服务与调度器。
 - **apt 源**: 第 1 步已固定到 `kali.download`，避免默认 `http.kali.org` 重定向到失效 mirror（neusoft）；CI 与本地都受益。
-- **pi 执行器依赖**: `@earendil-works/pi-coding-agent`（**版本锁定 `PI_VERSION=1.1.0`**，构建期断言实际安装版本防 npm latest 漂移）与 `@modelcontextprotocol/sdk` 随镜像全局安装；`/opt/mirrorstrike/node_modules` 软链到 `$(npm root -g)`，供 pi 扩展（运行时位于宿主机挂载的 `/opt/mirrorstrike/pi-agent`，可能不含 node_modules）做 ESM 裸导入解析。**Node 必须 >= 22.19**，构建期有版本断言，升级 pi 主版本时需同步复核。
-- **pi 挂载点**: `/opt/mirrorstrike/pi-agent` 为只读共享层（扩展/CLAUDE.md/models.json），`/opt/mirrorstrike/pi-agent/agents` 为可写会话层；Dockerfile 仅建占位目录，不可向其中安装工具。
+- **pi 执行器依赖**: `@earendil-works/pi-coding-agent`（**版本锁定 `PI_VERSION=1.4.0`**，构建期断言实际安装版本防 npm latest 漂移）与 `@modelcontextprotocol/sdk` 随镜像全局安装；`/opt/mirrorstrike/node_modules` 软链到 `$(npm root -g)`，供 pi 扩展（完整版运行时位于宿主机挂载的 `/opt/mirrorstrike/pi-agent`、可能不含 node_modules；tsec-hosted 随 `app/` 预置）做 ESM 裸导入解析。**Node 必须 >= 22.19**，构建期有版本断言，升级 pi 主版本时需同步复核。
+- **pi 挂载点**: `/opt/mirrorstrike/pi-agent` 为只读共享层（extensions/CLAUDE.md 等）；平台 Worker 的 Agent 会话根在任务工作区 `.mirrorstrike/pi-agents`（随任务目录整删），不再挂载独立的全局 `pi-agent/agents` 会话卷（共享层只读挂载内历史 `agents/` 即使存在也仅只读）。tsec 托管调度器（entrypoint 直驱 guard.py）例外使用镜像内 `/opt/mirrorstrike/pi-agent/agents` 作为可写会话层，两者不要混用。Dockerfile 仅建占位目录，不可向其中安装工具。
 - **WORKDIR 中立**: 镜像默认 `WORKDIR /opt/mirrorstrike`，仅影响 `docker run/exec` 的默认 shell 位置；Agent 进程 cwd 由 wrapper 设置为 pi-agent，修改 WORKDIR 不影响执行器。
 
 ## 自动化构建
