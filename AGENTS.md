@@ -1,24 +1,32 @@
 # mirrorstrike-container
 
-MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（两镜像仅允许 URL+SHA256 锁定的 pinned 资产；capa-rules 规则目录为唯一的 shallow-clone 例外，待固定哈希）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级自研/敏感工具与 nuclei 模板在完整版经运行时挂载（`/opt/tools`、`/opt/kb` 等）提供、在 tsec-hosted 随镜像预置。
+MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测试 / CTF / 代码审计 / Pwn** 四类任务场景：**AI 执行器仅 pi-coding-agent**、**无 metasploit**、**零 GitHub 下载工具**（仅允许 URL+SHA256 锁定的 pinned 资产，集中定义在 `container/Dockerfile.base`；capa-rules 规则目录为唯一的 shallow-clone 例外，待固定哈希）、**交互单 JDK8**（jadx/apktool 等需新 JVM 的工具经 wrapper 绑定独立 JVM 隔离），重量级自研/敏感工具与 nuclei 模板在 agent 版经运行时挂载（`/opt/tools`、`/opt/kb` 等）提供、在 tsec-hosted 随镜像预置。
 
 ## 项目结构
 
 ```
 .
 ├── container/
-│   ├── Dockerfile                  # 完整版（四场景，tsec-hosted 工具面超集）构建文件
-│   └── Dockerfile.tsec-hosted      # tsecbench 托管 all-in-one 唯一最终版（含 PG/Redis server 端）
+│   ├── Dockerfile.base            # 公共 base：apt 工具面 + pinned 资产 + Android 栈 + JDK8 + Node24/pnpm
+│   ├── Dockerfile                 # agent 执行镜像（FROM base）：qemu/libc6-dbg + semgrep + pi-coding-agent
+│   ├── Dockerfile.sextant         # sextant-runtime（FROM base）：qemu/libc6-dbg + musl-tools + bootstrap
+│   ├── Dockerfile.tsec-hosted     # tsecbench 托管 all-in-one（当前仍自足 FROM kali-rolling，待切 base）
+│   └── sextant-bootstrap          # sextant 首次引导脚本（幂等；产物落挂载卷，镜像内不装物）
+├── docs/
+│   └── docker-build-plan.md       # 1 base + 3 变体方案、挂载契约与复核记录
 ├── .github/
 │   └── workflows/
-│       └── docker-build.yml     # 自动化构建与推送工作流（完整版）
+│       └── docker-build.yml       # base → agent/sextant 串联构建（BASE_IMAGE 传递）
 ├── AGENTS.md
 └── README.md
 ```
 
 ## 镜像变体
 
-- **完整版**（`container/Dockerfile`）：四场景显式最小清单。**2026-10-16 重构为 tsec-hosted 工具面超集**——tsec-hosted 有的全包含（pinned chisel/grpcurl/jadx/apktool/capa、exploitdb/kubectl/浏览器层门控、nmap 入口修复、playwright-cli wrapper、psmisc/python3-setuptools 收口等），另保留完整版刚需（代码审计 semgrep、跨架构 Pwn qemu-user/-static + libc6-dbg）。与 tsec-hosted 的差异面：
+- **公共 base**（`container/Dockerfile.base`）：2026-11-09 自原完整版抽出的公共层——Kali 渗透/CTF/Pwn/逆向 apt 工具面（**不含** qemu 系，由变体补）、pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21，URL+SHA256）、Android 栈 `/opt/android` + capa `/opt/capa`、JDK8、pinned Node 24.9 + corepack/双版本 pnpm、kali 用户 + sudo、nmap 入口修复、nuclei 离线配置、`/opt/*` 占位。**pinned 版本与 SHA256 只在此文件定义**，变体不得复制。tsec-hosted 尚未切换（计划 §8 步骤 3）。
+- **agent**（`container/Dockerfile`，`FROM base`）：在 base 上只追加 qemu-user/-static + libc6-dbg（跨架构 Pwn）、semgrep（代码审计）、pi-coding-agent 1.4.0（版本断言）；无 ENTRYPOINT。
+- **sextant-runtime**（`container/Dockerfile.sextant`，`FROM base`）：sextant/DSH 求解运行时环境——base + qemu/libc6-dbg + musl-tools（landlock-run 静态构建）+ `sextant-bootstrap` 引导脚本；**不装 DSH/Sextant 本体**，源码与产物经 `/opt/sextant`、`/opt/deepseek-harness`、`/opt/sextant-runtime` 卷挂载，首次 `docker exec` 跑 bootstrap（幂等，见脚本 `--help`）。无 ENTRYPOINT。
+- **完整版 / agent 工具面**（`container/Dockerfile`）：四场景显式最小清单。**2026-10-16 重构为 tsec-hosted 工具面超集**——tsec-hosted 有的全包含（pinned chisel/grpcurl/jadx/apktool/capa、exploitdb/kubectl/浏览器层门控、nmap 入口修复、playwright-cli wrapper、psmisc/python3-setuptools 收口等），另保留完整版刚需（代码审计 semgrep、跨架构 Pwn qemu-user/-static + libc6-dbg）。与 tsec-hosted 的差异面：
   - **无 server 端组件**：不装 postgresql/redis-server/tini；数据库客户端完整直装（mysql/psql/redis-cli = default-mysql-client/postgresql-client/redis-tools）
   - pinned 资产与 tsec-hosted 同源同值（URL+SHA256 锁定）；android 栈落 `/opt/android`、capa 落 `/opt/capa`（`/opt/tools` 为运行时 :ro 挂载点，镜像内不可装物，见「关键约定」）
   - ysoserial/JNDIExploit/frp/fscan/gsl5-cli/mdut-cli/suo5 等仍走 `/opt/tools` 运行时挂载（tsec-hosted 为构建期 COPY，工具面等价）
@@ -103,26 +111,32 @@ MirrorStrike Docker 容器环境，基于 Kali Linux 构建，面向 **渗透测
 
 - ✅ `psmisc`（killall/pstree，~1MB）：2026-10-16 已落入完整版（tsec-hosted 待同步）。
 - ✅ `python3-setuptools`：2026-10-16 已落入完整版（python3-pip 已不传递带入，dict-base 原镜像为显式安装；tsec-hosted 待同步）。
+- ✅ 2026-11-09 对外复核修复：CI base→agent/sextant 串联（`BASE_IMAGE` 传递）、全局 npm 固定 `/opt/node24/bin/npm` 并修软链、bootstrap `--help`/幂等 marker/版本派生（详见 `docs/docker-build-plan.md` §10 #17）。
 - tsec-hosted 当前不携带独立 `ysoserial`；`JNDIExploit` 由 `/opt/tools/deepstrike-kit` 提供。普通 Worker 如保留独立 `/opt/tools/ysoserial`，只走 bash 路线，均不提供 `/usr/local/bin` wrapper。
-- `capa-rules` 仍未 URL+SHA256 固定（`Dockerfile.tsec-hosted` 当前 `git clone --depth 1`）：建议改为 pinned tarball 或固定 commit，并在构建期校验哈希/提交，收口「零 GitHub 下载」唯一例外。
+- `capa-rules` 仍未 URL+SHA256 固定（`Dockerfile.tsec-hosted` 与 `Dockerfile.base` 均为 `git clone --depth 1`）：建议改为 pinned tarball 或固定 commit，并在构建期校验哈希/提交，收口「零 GitHub 下载」唯一例外。
+- tsec-hosted 尚未 `FROM :base`（计划 §8 步骤 3）：切换前其 Node 仍为 apt 版、版本门仍为 ≥22.19，与 base 的 24.9 基线不一致。
 
 ## 关键约定（修改 Dockerfile 必读）
 
 - **运行时挂载点**: 完整版的 `/opt/tools`、`/opt/kb`、`/opt/workspace`、`/opt/traffic` 由平台运行时 `-v` 挂载（kb/tools 只读），不再挂载 `/opt/deepstrike`；这些目录仅建占位目录并 chown 给 kali，不可往里装工具。tsec-hosted 例外：`/opt/tools`、`/opt/kb` 为构建期 COPY 的同一 `deepstrike-kit.zip` 安装内容与最小化语料，`/opt/workspace`、`/opt/traffic` 仍运行时注入，不复制旧项目或散落工具目录。
-- **零 GitHub 下载（pinned 资产例外两镜像同）**: 除 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21，升级须同步更新哈希）外，构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；**唯一例外**：capa-rules 规则目录当前由 `git clone --depth 1` 获取（未 SHA 固定，见「复核待办」）；nuclei 模板指向挂载路径 `/opt/kb/kb-resource/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新），capa 规则随镜像同禁联网更新（完整版 `/opt/capa/rules`、tsec-hosted `/opt/tools/capa/rules`）。
-- **JDK 策略**: 交互 java 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差。jadx/apktool 两镜像同为 pinned 1.5.6 / 3.0.2 + jlink 裁剪 JRE21，wrapper 显式指向（完整版 `/opt/android/jre`、tsec-hosted `/opt/tools/android/jre`——`/opt/tools` 在完整版为运行时 :ro 挂载点，故另择 `/opt/android`），与 JDK8 互不污染；Kali apt 版 jadx/apktool 及其传递带入的 JVM25（default-jre）依赖链已在完整版移除。ghidra 等 JDK21 工具不在本镜像（走 reverse-static 专用镜像）。
+- **零 GitHub 下载（pinned 资产集中在 base，两镜像同源）**: 除 URL+SHA256 锁定的 pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21，升级须同步更新哈希；**定义只在 `Dockerfile.base`**）外，构建期禁止任何 GitHub release / git clone 依赖（katana/dalfox/cloudfox/kerbrute/trivy/ysoserial/jwt_tool/jdwp-shellifier/pwndbg/nuclei-templates 均不在镜像内）；**唯一例外**：capa-rules 规则目录当前由 `git clone --depth 1` 获取（未 SHA 固定，见「复核待办」）；nuclei 模板指向挂载路径 `/opt/kb/kb-resource/nuclei-templates`（`NUCLEI_TEMPLATES_DIR` + `~/.config/nuclei/config.yaml`，禁联网更新），capa 规则随镜像同禁联网更新（完整版 `/opt/capa/rules`、tsec-hosted `/opt/tools/capa/rules`）。
+- **JDK 策略**: 交互 java 仅 JDK 8（sdkman `current`，已用 `ENV JAVA_HOME/PATH` 让非交互 shell 生效）。单 JDK 是刻意的：反序列化利用链对新 JDK 兼容差。jadx/apktool 在 base 统一 pinned 1.5.6 / 3.0.2 + jlink 裁剪 JRE21，wrapper 显式指向（完整版 `/opt/android/jre`、tsec-hosted `/opt/tools/android/jre`——`/opt/tools` 在完整版为运行时 :ro 挂载点，故另择 `/opt/android`），与 JDK8 互不污染；Kali apt 版 jadx/apktool 及其传递带入的 JVM25（default-jre）依赖链已在完整版移除。ghidra 等 JDK21 工具不在本镜像（走 reverse-static 专用镜像）。
 - **sudo 免密**: 运行用户 kali(uid 1000) 带 `NOPASSWD:ALL` sudo——平台高安全档（`docker_profile=security`）以镜像默认用户运行，低权限工具链依赖 sudo 提权。
+- **npm 全局安装**: 一律用 `/opt/node24/bin/npm` 绝对路径。sudo 的 `secure_path=/usr/sbin:/usr/bin:/sbin:/bin` 不含 `/usr/local/bin`，裸 `sudo npm` 会命中 apt 版（base 已不装 apt `npm`/`nodejs`，避免双 Node）并装到 `/usr/local/lib/node_modules`，与非 sudo 的 `npm root -g`（`/opt/node24/lib/node_modules`）失配，导致 `/opt/mirrorstrike/node_modules` 软链指向空目录、pi 扩展 ESM 裸导入 `ERR_MODULE_NOT_FOUND`。base 构建期断言 `npm root -g`，agent 构建期断言软链目标内含 `@earendil-works/pi-coding-agent` 与 `@modelcontextprotocol/sdk`。
+- **sextant 卷契约**: `/opt/sextant`、`/opt/deepseek-harness` 为 rw 源码卷且**不声明 VOLUME**（缺挂载由 `sextant-bootstrap` 步骤 0 fail-closed）；`/opt/sextant-runtime` 为 `$DSH_HOME` 状态卷（VOLUME 声明，不显式挂载会落匿名卷）。bootstrap 幂等标记：步骤 1–3 记 dsh commit（`$DSH_HOME/.dsh-build-done`），步骤 4 记 sextant+dsh 双 commit（`$SEXTANT_DIR/.dsh-integration-done`）；换 checkout 先 `git fetch --tags`（否则 ref 校验退回 short SHA 而失败）。`docker commit` 不含卷内容，离线预引导须导出卷 tar（见计划 §7）。
 - **无 server 端组件（完整版）**: 不装 postgresql/redis-server/tini 等；PG/Redis 由平台侧提供。平台 Worker 以 `docker run --init --entrypoint tail … -f /dev/null` 拉起容器，生命周期随 Agent 期望：有在途 Agent 时保活，全部退出后回收，Planner 补出后续 Intent 时重建；容器内 tmux/nohup/本地监听不保证跨 Agent 存活。tsec-hosted 是 all-in-one 例外，内置 PG/Redis/tini。
 - **无 ENTRYPOINT（完整版）**: 完整版只留 `CMD ["/bin/bash"]`，平台 Worker 统一覆盖 entrypoint、经 `docker exec` 拉起 Agent；tsec-hosted 使用 `tini + entrypoint.sh` 启动内置服务与调度器。
 - **apt 源**: 第 1 步已固定到 `kali.download`，避免默认 `http.kali.org` 重定向到失效 mirror（neusoft）；CI 与本地都受益。
-- **pi 执行器依赖**: `@earendil-works/pi-coding-agent`（**版本锁定 `PI_VERSION=1.4.0`**，构建期断言实际安装版本防 npm latest 漂移）与 `@modelcontextprotocol/sdk` 随镜像全局安装；`/opt/mirrorstrike/node_modules` 软链到 `$(npm root -g)`，供 pi 扩展（完整版运行时位于宿主机挂载的 `/opt/mirrorstrike/pi-agent`、可能不含 node_modules；tsec-hosted 随 `app/` 预置）做 ESM 裸导入解析。**Node 必须 >= 22.19**，构建期有版本断言，升级 pi 主版本时需同步复核。
+- **pi 执行器依赖**: `@earendil-works/pi-coding-agent`（**版本锁定 `PI_VERSION=1.4.0`**，构建期断言实际安装版本防 npm latest 漂移）与 `@modelcontextprotocol/sdk` 随镜像全局安装（安装方式见上条「npm 全局安装」）；`/opt/mirrorstrike/node_modules` 软链到 `/opt/node24/lib/node_modules`（构建期断言两个包存在），供 pi 扩展（完整版运行时位于宿主机挂载的 `/opt/mirrorstrike/pi-agent`、可能不含 node_modules；tsec-hosted 随 `app/` 预置）做 ESM 裸导入解析。**Node 基线 >= 24.9（pinned 24.9.0 tarball，构建期断言；pi 的 >=22.19 被覆盖）**，升级 pi 主版本时需同步复核。
 - **pi 挂载点**: `/opt/mirrorstrike/pi-agent` 为只读共享层（extensions/CLAUDE.md 等）；平台 Worker 的 Agent 会话根在任务工作区 `.mirrorstrike/pi-agents`（随任务目录整删），不再挂载独立的全局 `pi-agent/agents` 会话卷（共享层只读挂载内历史 `agents/` 即使存在也仅只读）。tsec 托管调度器（entrypoint 直驱 guard.py）例外使用镜像内 `/opt/mirrorstrike/pi-agent/agents` 作为可写会话层，两者不要混用。Dockerfile 仅建占位目录，不可向其中安装工具。
 - **WORKDIR 中立**: 镜像默认 `WORKDIR /opt/mirrorstrike`，仅影响 `docker run/exec` 的默认 shell 位置；Agent 进程 cwd 由 wrapper 设置为 pi-agent，修改 WORKDIR 不影响执行器。
 
 ## 自动化构建
 
-推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像至 `ghcr.io/hanc00l/mirrorstrike-container`：
-- `latest`（完整版）
+推送或合并 PR 到 `main`/`master` 分支时，GitHub Actions 自动构建并推送镜像至 `ghcr.io/hanc00l/mirrorstrike-container`（`container/**` 或 workflow 变更触发）：
+- 先建 `base`（`Dockerfile.base`）并推送 `:base`（同仓 PR 为 `:base-pr-<num>`，不污染 `:base`）
+- 再由两个变体 job 消费同一 base（`--build-arg BASE_IMAGE=…`）：`:latest`（agent）、`:sextant`（sextant-runtime）
+- fork PR：`GITHUB_TOKEN` 只读，base 只构建不推送、变体 job 跳过；tsec-hosted 不在本仓库 CI（由 mirrorstrike `deploy/hosted/build-image.sh` 构建）
 
 ## 参考
 

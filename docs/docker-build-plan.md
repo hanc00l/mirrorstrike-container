@@ -215,10 +215,10 @@ RUN node -e 'const v=process.versions.node.split(".").map(Number);if(v[0]<24||(v
      （默认 `dsh`，见 `packages/dsh-plugin/src/dsh/wiring.ts`）执行
      `dsh --profile sextant-worker`。DSH 源码包的 bin 是
      `apps/cli/lib/bin.js`（`apps/cli/package.json` 的 `bin.dsh`，由 `build:lib:host`
-     产出），因此 bootstrap 生成 `/usr/local/bin/dsh` 包装脚本
+     产出），因此 bootstrap 生成 `$DSH_HOME/bin/dsh` 包装脚本
      （`exec /opt/node24/bin/node /opt/deepseek-harness/apps/cli/lib/bin.js "$@"`），
-     并断言 `dsh --version` 输出 `0.2.2-alpha.3`。该 launcher 落在镜像层
-     `/usr/local/bin`，由 kali 经 sudo 写入。
+     并断言 `dsh --version` 输出 `0.2.2-alpha.3`。launcher 落在**运行态卷**（容器重建
+     不丢），每次引导只校准 `/usr/local/bin/dsh -> $DSH_HOME/bin/dsh` 软链（kali 经 sudo）。
   7. 输出版本清单（DSH commit、Sextant commit）写入
      `$DSH_HOME/sextant-build-manifest.json`，供验收核对。
 - **镜像侧门禁**（CI 构建期仍可执行）：用一个临时构建 stage 挂载 pinned DSH/Sextant
@@ -369,24 +369,35 @@ kb-resource 断言）完全一致，无运维侧目录重构需求；唯一前�
 
 ## 8. 实施步骤
 
+> 落地状态（2026-11-09）：步骤 2、4、5 已完成并本地实测（base 4.99GB / agent 6.04GB /
+> sextant 5.49GB，三项冒烟通过）；步骤 1 的 Node/DSH 基线已固定、capa-rules 仍待收口；
+> 步骤 3（tsec-hosted 切 base）与步骤 6 的跨仓文档（sextant 仓库 deployment.md）待做。
+
 1. **固定版本基线**：确定 Node 24 pinned 版本 + SHA256、DSH pinned ref
    `dsh-v0.2.2-alpha.3` 对应 commit SHA（写入镜像 `DSH_EXPECTED_REF`/校验逻辑）；
    capa-rules 改 pinned commit + 构建期校验（收口唯一例外）。
+   —— Node 24.9.0 哈希与 DSH commit `05b1cae8…` 已固定并复核；**capa-rules 仍未收口**。
 2. **抽出 `Dockerfile.base`**：从现 `Dockerfile` 剥离公共层，先保证 agent 镜像
    `FROM base` 后功能与现状等价（逐节 diff + 冒烟）。**同时收口已确认漂移项**：
    `NUCLEI_TEMPLATES_DIR` 统一为 `/opt/kb/kb-resource/nuclei-templates`
    （agent 版现值 `/opt/kb/nuclei-templates`，与 tsec-hosted 不一致；改 `ENV` 与
    `~/.config/nuclei/config.yaml` 两处。已复核：与 mirrorstrike 平台 KB 目录契约
    `{kb_dir}/kb-resource` 一致，无运维侧目录重构需求——已落地于 container/Dockerfile）。
+   —— ✅ 已落地。
 3. **改造 tsec-hosted**：`FROM base`，补齐其待同步项（psmisc、python3-setuptools、
    apt cache mount、curl retry），保持 ENTRYPOINT/COPY 形态与 build-image.sh 不变。
+   —— ⏳ 未做（当前仍自足 `FROM kali-rolling`）。
 4. **新增 `Dockerfile.sextant` + `sextant-bootstrap` 引导脚本**（构建上下文
    `container/`，故两文件落 `container/Dockerfile.sextant`、`container/sextant-bootstrap`）：
    按 §4 落地（镜像只装工具链），本地构建 + §6 门禁验证（CI stage 挂 pinned 源码跑全链路）。
+   —— ✅ 已落地（本地全链路 bootstrap 实测通过；CI 内的 pinned 源码 stage 未加）。
 5. **CI 更新**：`docker-build.yml` 改为 base→三变体串联，补 sextant tag 推送；
    mirrorstrike 的 `deploy/hosted/build-image.sh` 同步改 `FROM :base`（§6 注意）。
+   —— ✅ 已改为 base → agent/sextant（`BASE_IMAGE` 传递，PR 用 `:base-pr-<num>`）；
+   `build-image.sh` 侧待步骤 3 一起改。
 6. **文档同步**：AGENTS.md 模板矩阵、README 构建命令、`/opt/sextant/docs/deployment.md`
    增加"容器内运行"一节（§4.1 的 exec 命令）。
+   —— ✅ 本仓库 AGENTS.md / README / 本文件已同步；sextant 仓库文档待补。
 
 ## 9. 风险与待拍板项
 
@@ -428,3 +439,4 @@ kb-resource 断言）完全一致，无运维侧目录重构需求；唯一前�
 | 14 | **外评采纳**（同上 P2）：`.dsh-integration-done` 标记不随 checkout 变化失效 | 标记记录 sextant/dsh 双 commit，不一致即重跑同步 |
 | 15 | **外评采纳**（同上 P2）：`docker commit` 不含 VOLUME 内容，"预引导打包"须改为导出卷 tar / 衍生镜像 | §7 VOLUME 说明补 SOP；源码目录移出 VOLUME（缺挂载由 bootstrap 步骤 0 fail-closed 兜底），pnpm install 加 `--frozen-lockfile`、补 `git fetch --tags` 说明 |
 | 16 | **构建落地实测**（2026-11-09，base→agent→sextant 三连全通过）：① corepack 的 lastKnownGood 默认 per-user（`~/.cache`），运行期 kali 首跑 pnpm 现场下载 latest 不受 `--activate` 钉住 → `COREPACK_HOME=/opt/corepack-home` 烘入双版本 + `chmod a+rX`；② 登录 shell 被 `/etc/profile` 重置 PATH → `/etc/profile.d/node24.sh` 补回；③ base 默认用户为 kali，变体层 `mkdir /opt/*` 须 sudo；④ 构建上下文必须 `container/` | 已全部落入 `Dockerfile.base` / `Dockerfile.sextant`；**实测验收**：agent `pi=1.4.0`/Node 24.9.0/JDK8/12 工具全过、登录 shell `pnpm=12.16.1` 零下载；sextant `musl-gcc`/bootstrap 可执行/无 pi/无 semgrep/VOLUME=5 点/`DSH_EXPECTED_REF=dsh-v0.2.2-alpha.3`+commit `05b1cae8`。镜像体积：base 4.99GB / agent 6.04GB / sextant 5.49GB（tag `base-variant`，正式发布按 §6 tag 方案） |
+| 17 | **对外复核修复**（2026-11-09，本轮）：① CI 只建 agent、`FROM :base` 在 GHCR 不存在 → push 必挂；② `sudo npm` 的 `secure_path` 不含 `/usr/local/bin`，全局包装到 `/usr/local/lib/node_modules`，而软链指向 `/opt/node24/lib/node_modules` → `/opt/mirrorstrike/node_modules` 空链、pi 扩展 ESM 兜底 `ERR_MODULE_NOT_FOUND`（旧镜像用 apt npm 时两边一致，属本次 Node 切换引入）；③ bootstrap 步骤 1–3 只按产物存在跳过，换 checkout 会沿用旧树；④ `DSH_VERSION` 硬编码与可配 ref 脱节；⑤ `Dockerfile.sextant` 的 `sextant-bootstrap --help` 实际会跑步骤 0 | ① workflow 改 base → agent/sextant（`outputs.image` + `--build-arg BASE_IMAGE`，同仓 PR 用 `:base-pr-<num>`，fork PR 跳过变体；paths 收 `container/**`）；② 全局安装统一 `/opt/node24/bin/npm`（base 断言 `npm root -g`），软链固定 `/opt/node24/lib/node_modules` 并断言两个包存在，移除 apt `npm` 消除双 Node；③ 步骤 1–3 共用 `$DSH_HOME/.dsh-build-done`（记 dsh commit）；④ `DSH_VERSION` 默认 `${DSH_EXPECTED_REF#dsh-v}`，可 env 覆盖；⑤ bootstrap 增 `--help`/参数校验，镜像内改 `bash -n` + `--help` 冒烟，脚本提交位 0755。另修 AGENTS/README 的 Node ≥22.19 旧口径与构建顺序 |

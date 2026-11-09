@@ -9,7 +9,9 @@
 # 本层追加：qemu 系+libc6-dbg（与 agent 同承诺）、musl-tools（landlock-run 静态构建）、
 # sextant-bootstrap、/opt/{sextant,deepseek-harness,sextant-runtime} 占位 + VOLUME 声明。
 # =============================================================================
-FROM ghcr.io/hanc00l/mirrorstrike-container:base
+# FROM 可覆盖：CI 传本次构建的 base tag（同仓 PR 为 :base-pr-<num>），本地默认 :base
+ARG BASE_IMAGE=ghcr.io/hanc00l/mirrorstrike-container:base
+FROM ${BASE_IMAGE}
 
 ARG DSH_EXPECTED_REF=dsh-v0.2.2-alpha.3
 ARG DSH_EXPECTED_COMMIT=05b1cae8db6e674c5685101494d4eec24652424a
@@ -27,9 +29,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     musl-gcc --version | head -1
 
 # ---------- 2. 首次引导脚本（幂等；产物落挂载卷，镜像内不装物）----------
+# 冒烟用 `--help`（纯 usage，不触碰 checkout/卷）与 `bash -n`（语法检查）；
+# 不要用无参执行——那会真跑步骤 0，构建上下文里若恰好带了源码就会触发全量引导。
 COPY sextant-bootstrap /usr/local/bin/sextant-bootstrap
 RUN sudo chmod 0755 /usr/local/bin/sextant-bootstrap && \
-    sextant-bootstrap --help 2>/dev/null; test -x /usr/local/bin/sextant-bootstrap
+    bash -n /usr/local/bin/sextant-bootstrap && \
+    sextant-bootstrap --help | head -1
 
 # ---------- 3. 目录占位（均为运行时挂载点，镜像内不装物；base 默认用户为 kali，走 sudo）----------
 RUN sudo mkdir -p /opt/sextant /opt/deepseek-harness /opt/sextant-runtime && \

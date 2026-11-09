@@ -9,6 +9,9 @@
 # 环境变量：
 #   DSH_EXPECTED_REF     期望的 DSH git ref/tag（默认 dsh-v0.2.2-alpha.3）
 #   DSH_EXPECTED_COMMIT  期望的 DSH commit SHA（可选；设置则严格校验，fail-closed）
+#   DSH_VERSION           dsh --version 断言值（默认由 ref 去 dsh-v 前缀派生）
+#   SEXTANT_BOOTSTRAP_SKIP_VERIFY=1  跳过 verify:dsh-build 门禁
+# 其余变量与参数（--help）见 `sextant-bootstrap --help`。
 # =============================================================================
 set -euo pipefail
 
@@ -19,12 +22,39 @@ DSH_SOURCE_DIR="${DSH_SOURCE_DIR:-$DSH_DIR}"
 export DSH_SOURCE_DIR   # build:dsh-integration 子进程需要它，赋值不够
 EXPECTED_REF="${DSH_EXPECTED_REF:-dsh-v0.2.2-alpha.3}"
 EXPECTED_COMMIT="${DSH_EXPECTED_COMMIT:-}"
-DSH_VERSION="0.2.2-alpha.3"
+# dsh --version 断言值默认从 pinned ref 派生（dsh-v0.2.2-alpha.3 → 0.2.2-alpha.3），
+# 换 ref 时无需再改脚本；显式设置 DSH_VERSION 可覆盖。
+DSH_VERSION="${DSH_VERSION:-${EXPECTED_REF#dsh-v}}"
 
 log() { echo "[bootstrap] $*"; }
 fail() { echo "[bootstrap][fatal] $*" >&2; exit 1; }
 
+usage() {
+  cat <<'EOF'
+sextant-bootstrap — sextant-runtime 镜像首次引导（幂等）
+
+用法: sextant-bootstrap [--help]
+
+环境变量:
+  DSH_DIR / SEXTANT_DIR / DSH_HOME_DIR    挂载点（默认 /opt/deepseek-harness、
+                                          /opt/sextant、/opt/sextant-runtime）
+  DSH_SOURCE_DIR                          DSH checkout（默认 = DSH_DIR）
+  DSH_EXPECTED_REF / DSH_EXPECTED_COMMIT  期望的 DSH ref / commit（fail-closed 校验）
+  DSH_VERSION                             dsh --version 断言值（默认由 ref 去掉 dsh-v 前缀）
+  NODE_EXE                                launcher 使用的 node（默认 /opt/node24/bin/node）
+  SEXTANT_BOOTSTRAP_SKIP_VERIFY=1         跳过 verify:dsh-build（约省 1–2 分钟）
+EOF
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
+[ "$#" -eq 0 ] || fail "不支持的参数：$*（仅 --help）"
+
 # ---------- 步骤 0：版本前置校验（fail-closed） ----------
+# 浅克隆缺 tags 时 `git describe --tags` 会退回 short SHA → 这里直接报 ref 不符；
+# 挂载前先 `git -C <checkout> fetch --tags`（离线镜像可预先打 tag）。
 [ -d "$DSH_DIR/.git" ] || fail "DSH checkout 缺失：$DSH_DIR（请先挂载并 checkout 到 $EXPECTED_REF）"
 [ -d "$SEXTANT_DIR" ] || fail "sextant checkout 缺失：$SEXTANT_DIR"
 current_ref="$(git -C "$DSH_DIR" describe --tags 2>/dev/null || git -C "$DSH_DIR" rev-parse --short HEAD)"
@@ -37,19 +67,31 @@ if [ -n "$EXPECTED_COMMIT" ]; then
 fi
 log "步骤 0 通过：DSH=$current_ref commit=$(git -C "$DSH_DIR" rev-parse --short HEAD)"
 
+# 步骤 1–3 共用完成标记：内容为 DSH commit，commit 变化即整体重跑。
+# 只按「产物存在」跳过会在换 checkout 后沿用旧 node_modules / 旧 lib（deployment.md
+# §2.2 的实证教训），故与步骤 4 的 sextant/dsh 双 commit 标记同构。
+BUILD_MARKER="$DSH_HOME_DIR/.dsh-build-done"
+mkdir -p "$DSH_HOME_DIR"
+want_build="dsh_commit=$(git -C "$DSH_DIR" rev-parse HEAD)"
+build_ready=0
+if [ -f "$BUILD_MARKER" ] && [ "$(cat "$BUILD_MARKER")" = "$want_build" ]; then
+  build_ready=1
+fi
+
 # ---------- 步骤 1：DSH pnpm install ----------
-if [ -d "$DSH_DIR/node_modules" ]; then
-  log "步骤 1 跳过：node_modules 已存在"
+if [ "$build_ready" = "1" ] && [ -d "$DSH_DIR/node_modules" ]; then
+  log "步骤 1 跳过：node_modules 已就绪（DSH commit 未变）"
 else
-  log "步骤 1：DSH pnpm install（--frozen-lockfile；浅克隆先 git fetch --tags）"
+  log "步骤 1：DSH pnpm install（--frozen-lockfile）"
   (cd "$DSH_DIR" && corepack pnpm install --frozen-lockfile)
 fi
 
 # ---------- 步骤 2：native 完整构建（landlock-run + system.node） ----------
 # 完整构建（不带 --host-addon-only）：landlock-run 为 workspace-write 沙箱必需。
-if [ -x "$DSH_DIR/native/system/packages/linux-x64/bin/landlock-run" ] \
+if [ "$build_ready" = "1" ] \
+   && [ -x "$DSH_DIR/native/system/packages/linux-x64/bin/landlock-run" ] \
    && [ -f "$DSH_DIR/native/system/packages/linux-x64/bin/glibc/system.node" ]; then
-  log "步骤 2 跳过：native 产物已存在"
+  log "步骤 2 跳过：native 产物已就绪（DSH commit 未变）"
 else
   log "步骤 2：native 完整构建（landlock-run + system.node）"
   (cd "$DSH_DIR" && node native/system/scripts/build.ts)
@@ -58,8 +100,8 @@ fi
   || fail "landlock-run --probe 失败（内核 <5.13？参考运行手册 bwrap 后备路径）"
 
 # ---------- 步骤 3：DSH lib + web 构建 ----------
-if [ -f "$DSH_DIR/apps/cli/lib/bin.js" ] && [ -d "$DSH_DIR/apps/web/dist" ]; then
-  log "步骤 3 跳过：lib/web 构建产物已存在"
+if [ "$build_ready" = "1" ] && [ -f "$DSH_DIR/apps/cli/lib/bin.js" ] && [ -d "$DSH_DIR/apps/web/dist" ]; then
+  log "步骤 3 跳过：lib/web 产物已就绪（DSH commit 未变）"
 else
   log "步骤 3：DSH build:lib:host / build:lib:client / build:web"
   (cd "$DSH_DIR" && NODE_OPTIONS=--max-old-space-size=6144 \
@@ -68,6 +110,8 @@ else
     corepack pnpm run build:web)
 fi
 [ -f "$DSH_DIR/apps/cli/lib/bin.js" ] || fail "apps/cli/lib/bin.js 未产出（build:lib:host 失败？）"
+# 步骤 1–3 全绿：落完成标记（下次同 commit 直接跳过）
+printf '%s\n' "$want_build" > "$BUILD_MARKER"
 
 # ---------- 步骤 4：sextant 安装 + 同构建 ----------
 # 幂等标记记录 sextant/dsh 两端 commit：任一变化即重跑同步，防止沿用旧产物/旧 catalog。
@@ -129,6 +173,7 @@ log "步骤 7：写构建清单"
 {
   echo "{"
   echo "  \"dsh_ref\": \"$current_ref\","
+  echo "  \"dsh_version\": \"$DSH_VERSION\","
   echo "  \"dsh_commit\": \"$(git -C "$DSH_DIR" rev-parse HEAD)\","
   echo "  \"sextant_commit\": \"$(git -C "$SEXTANT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)\","
   echo "  \"bootstrapped_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""

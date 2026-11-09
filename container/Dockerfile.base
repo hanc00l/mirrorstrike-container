@@ -1,5 +1,8 @@
 # =============================================================================
-# Dockerfile.base — 三模板公共基础镜像（agent / tsec-hosted / sextant 共享）
+# Dockerfile.base — 公共基础镜像（目标：agent / tsec-hosted / sextant 三者共享）
+#
+# 当前实际消费方：agent（Dockerfile）、sextant（Dockerfile.sextant）。tsec-hosted
+# 仍自足 FROM kali-rolling，待 docs/docker-build-plan.md §8 步骤 3 切换。
 #
 # 2026-11-09 自原完整版 Dockerfile 抽出。内容 = 三者最大交集：
 #   - Kali 渗透/CTF/Pwn/逆向 apt 工具面（不含 qemu 系——tsec-hosted 有意排除，
@@ -12,6 +15,12 @@
 #   - kali 用户 + sudo 免密、nmap 入口修复、nuclei 离线配置、/opt/* 占位目录
 # 不含：qemu 系、semgrep、pi-coding-agent、PG/Redis server、sextant-bootstrap。
 # apt 源可配 --build-arg KALI_MIRROR；升级 Node 只改 NODE24_URL + NODE24_SHA256。
+#
+# npm 约定：不再装 apt `npm`/`nodejs`（会和 pinned Node24 形成双轨）。全局包一律用
+# /opt/node24/bin/npm 安装——sudo 的 secure_path(/usr/sbin:/usr/bin:/sbin:/bin)
+# 不含 /usr/local/bin，裸 `sudo npm` 会命中 apt 版并装到 /usr/local/lib/node_modules，
+# 与非 sudo 的 `npm root -g`（/opt/node24/lib/node_modules）失配，导致
+# /opt/mirrorstrike/node_modules 软链指向空目录（pi 扩展 ESM 兜底失效）。
 # =============================================================================
 FROM --platform=amd64 kalilinux/kali-rolling:latest
 
@@ -41,6 +50,8 @@ ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/
 ARG APKTOOL_SHA256=eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd
 ARG CAPA_URL=https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip
 ARG CAPA_SHA256=07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4
+# capa-rules 是「零 GitHub 下载」唯一例外（git clone）；可用 --build-arg 指向内网镜像/离线副本
+ARG CAPA_RULES_URL=https://github.com/mandiant/capa-rules.git
 
 # Node 24 pinned（统一基线：DSH/Sextant 硬要求 ≥24.9，覆盖 pi ≥22.19；升级只改这里）
 # SHA256 来源 https://nodejs.org/dist/v24.9.0/SHASUMS256.txt；安装保留 include/（DSH
@@ -68,6 +79,7 @@ RUN rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list && \
 # 与原完整版一致，仅剔除 qemu-user/-static + libc6-dbg（变体层补装，见 §5 分层）。
 # 客户端直装（无 server 端组件）：mysql=default-mysql-client、psql=postgresql-client、
 # redis-cli=redis-tools；零预装字典（平台 dicts/ 承担）；dnsrecon 保留。
+# 不装 apt npm/nodejs：Node 由 §3b pinned 24.9 单一提供（见文件头 npm 约定）。
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
@@ -75,7 +87,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
       ca-certificates curl wget git sudo less vim-tiny file \
       procps psmisc iproute2 iputils-ping iputils-arping tmux rlwrap libcap2-bin \
-      bsdextrautils npm jq yq bc sqlite3 ripgrep fd-find php-cli python3-setuptools \
+      bsdextrautils jq yq bc sqlite3 ripgrep fd-find php-cli python3-setuptools \
       openssh-client sshpass netcat-openbsd ncat socat tcpdump tshark dnsutils whois proxychains4 \
       nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
       dnsrecon wafw00f whatweb \
@@ -173,9 +185,12 @@ RUN node -e 'const v=process.versions.node.split(".").map(Number);if(v[0]<24||(v
 # COREPACK_HOME 固定到 /opt/corepack-home 并烘入双版本：默认落 ~/.cache 时 lastKnownGood
 # 是 per-user 的，运行期 kali 首跑 pnpm 会现场下载 latest（不受 --activate 钉住）。
 # /etc/profile.d/node24.sh：登录 shell 被 /etc/profile 重置 PATH，补回 Node24/corepack。
+# 全局安装统一走绝对路径 /opt/node24/bin/npm（sudo 下裸 npm 会命中 apt 版，见文件头）；
+# 并以 npm root -g 断言全局前缀，防止未来 npm 版本变更把包装到别处。
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     COREPACK_HOME=/opt/corepack-home
-RUN npm install -g corepack@0.36.0 && \
+RUN /opt/node24/bin/npm install -g corepack@0.36.0 && \
+    test "$(/opt/node24/bin/npm root -g)" = /opt/node24/lib/node_modules && \
     corepack enable --install-directory /opt/node24/bin && \
     corepack prepare pnpm@${PNX_SEXTANT} --activate && \
     corepack prepare pnpm@${PNX_DSH} && \
@@ -196,7 +211,7 @@ RUN useradd -m -s /bin/bash kali && \
              /opt/mirrorstrike/pi-agent/agents /opt/mirrorstrike/logs/agent \
              /home/kali/.config/nuclei && \
     chown -R kali:kali /opt/tools /opt/kb /opt/workspace /opt/deepstrike /opt/traffic \
-                       /opt/mirrorstrike /home/kali/.config
+                       /opt/mirrorstrike /home/kali/.config /opt/corepack-home
 
 # ---------- 4b. Android 逆向层：jadx + apktool + jlink 裁剪 JRE（pinned）----------
 RUN set -eux; \
@@ -242,7 +257,7 @@ RUN set -eux; \
     install -m 0755 "${capa_bin}" /opt/capa/capa; \
     ln -sf /opt/capa/capa /usr/local/bin/capa; \
     for i in 1 2 3; do \
-      if git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/capa/rules; then break; fi; \
+      if git clone --depth 1 "${CAPA_RULES_URL}" /opt/capa/rules; then break; fi; \
       rm -rf /opt/capa/rules; sleep 5; \
     done; \
     test -d /opt/capa/rules/.git; \
@@ -252,18 +267,25 @@ RUN set -eux; \
 USER kali
 
 # ---------- 6b. 可选浏览器层（默认开；--build-arg WITH_PLAYWRIGHT=0 关闭）----------
+# 开启时必须 fail-closed：此前用 `... || echo warn` 收尾，npm 失败也会留下"成功"层，
+# 造成 WITH_PLAYWRIGHT=1 却无 playwright 的静默降级（且被 BuildKit 缓存后持续复用）。
+# 另：sudo 的 secure_path 不含 /opt/node24/bin，npm 是 `#!/usr/bin/env node` 的 JS，
+# 必须显式带上 node24 的 PATH，否则 `env: 'node': No such file or directory`。
 RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
       sudo apt-get update && \
       sudo apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
       sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/* && \
-      sudo npm install -g playwright @playwright/mcp; \
+      sudo env PATH=/opt/node24/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        /opt/node24/bin/npm install -g playwright @playwright/mcp && \
       printf '%s\n' '#!/bin/sh' \
         '# 浏览器自动化统一入口（dict-base AGENTS.md 对齐）：系统 Chromium，免下载浏览器' \
         'export PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium' \
-        'exec playwright "$@"' > /tmp/playwright-cli; \
-      chmod 0755 /tmp/playwright-cli && sudo mv /tmp/playwright-cli /usr/local/bin/playwright-cli; \
-    fi; \
-    playwright-cli --version >/dev/null 2>&1 || echo "[warn] 浏览器层未启用（WITH_PLAYWRIGHT=0），playwright-cli 缺席"
+        'exec playwright "$@"' > /tmp/playwright-cli && \
+      chmod 0755 /tmp/playwright-cli && sudo mv /tmp/playwright-cli /usr/local/bin/playwright-cli && \
+      playwright-cli --version && chromium --version; \
+    else \
+      echo "[info] WITH_PLAYWRIGHT=0：浏览器层未启用，playwright-cli 缺席"; \
+    fi
 
 # ---------- 7. SDKMAN JDK8（单 JDK：fx 变体安装后剔除 JavaFX）----------
 RUN set -eux; \
