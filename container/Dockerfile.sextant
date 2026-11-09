@@ -1,0 +1,48 @@
+# =============================================================================
+# Dockerfile.sextant — sextant-runtime 镜像（2026-11-09 新增，base 变体层）
+#
+# 只装工具链，不装 DSH/sextant 本体：源码与构建产物经 volume 挂载（docker-build-plan §4.3），
+# 首次引导由 sextant-bootstrap 幂等完成（pnpm install → native 完整构建 → 同构建 → 门禁
+# → dsh launcher）。进程经 docker run/exec 启动，无 ENTRYPOINT。
+# base 已含：Kali 工具面、pinned 资产、Android 栈、JDK8、Node24/pnpm、kali 用户、
+# nmap 修复、nuclei 离线配置（kb-resource 路径）。
+# 本层追加：qemu 系+libc6-dbg（与 agent 同承诺）、musl-tools（landlock-run 静态构建）、
+# sextant-bootstrap、/opt/{sextant,deepseek-harness,sextant-runtime} 占位 + VOLUME 声明。
+# =============================================================================
+FROM ghcr.io/hanc00l/mirrorstrike-container:base
+
+ARG DSH_EXPECTED_REF=dsh-v0.2.2-alpha.3
+ARG DSH_EXPECTED_COMMIT=05b1cae8db6e674c5685101494d4eec24652424a
+ENV DSH_EXPECTED_REF=${DSH_EXPECTED_REF} \
+    DSH_EXPECTED_COMMIT=${DSH_EXPECTED_COMMIT}
+
+# ---------- 1. qemu 系 + libc6-dbg（与 agent 同承诺）+ musl-tools（landlock-run 静态构建）----------
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    sudo apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
+    sudo apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
+      qemu-user qemu-user-static libc6-dbg musl-tools && \
+    sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/* && \
+    musl-gcc --version | head -1
+
+# ---------- 2. 首次引导脚本（幂等；产物落挂载卷，镜像内不装物）----------
+COPY sextant-bootstrap /usr/local/bin/sextant-bootstrap
+RUN sudo chmod 0755 /usr/local/bin/sextant-bootstrap && \
+    sextant-bootstrap --help 2>/dev/null; test -x /usr/local/bin/sextant-bootstrap
+
+# ---------- 3. 目录占位（均为运行时挂载点，镜像内不装物；base 默认用户为 kali，走 sudo）----------
+RUN sudo mkdir -p /opt/sextant /opt/deepseek-harness /opt/sextant-runtime && \
+    sudo chown -R kali:kali /opt/sextant /opt/deepseek-harness /opt/sextant-runtime
+
+# ---------- 4. VOLUME 声明：docker inspect 自描述挂载契约 ----------
+# 仅声明"丢了可由平台重建/兜底"的卷；两个源码目录（/opt/sextant、/opt/deepseek-harness）
+# 刻意**不**进 VOLUME——缺挂载时落空目录，bootstrap 步骤 0 立即 fail-closed 报
+# "checkout 缺失"，而不是静默落匿名卷把产物写进容器层（容器销毁即失）。
+# 注意：:ro 语义（tools/kb）仍由 docker run -v 声明；/opt/sextant-runtime 未显式 -v 时
+# 落匿名卷（兜底），生产启动必须显式挂载，否则每次重建都触发全量 bootstrap。
+VOLUME ["/opt/tools", "/opt/kb", "/opt/workspace", "/opt/traffic", "/opt/sextant-runtime"]
+
+USER kali
+WORKDIR /opt/sextant
+CMD ["/bin/bash"]

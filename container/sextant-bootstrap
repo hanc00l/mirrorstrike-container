@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# =============================================================================
+# sextant-bootstrap — sextant-runtime 镜像首次引导（幂等）
+#
+# 产物落挂载卷（/opt/deepseek-harness、/opt/sextant 构建产物；/opt/sextant-runtime
+# 运行态），镜像只含工具链。已完成步骤自动跳过，可重复执行。
+# 用法：容器内以 kali 用户执行 `sextant-bootstrap`（sudo 免密用于安装 dsh launcher）。
+#
+# 环境变量：
+#   DSH_EXPECTED_REF     期望的 DSH git ref/tag（默认 dsh-v0.2.2-alpha.3）
+#   DSH_EXPECTED_COMMIT  期望的 DSH commit SHA（可选；设置则严格校验，fail-closed）
+# =============================================================================
+set -euo pipefail
+
+DSH_DIR="${DSH_DIR:-/opt/deepseek-harness}"
+SEXTANT_DIR="${SEXTANT_DIR:-/opt/sextant}"
+DSH_HOME_DIR="${DSH_HOME_DIR:-/opt/sextant-runtime}"
+DSH_SOURCE_DIR="${DSH_SOURCE_DIR:-$DSH_DIR}"
+export DSH_SOURCE_DIR   # build:dsh-integration 子进程需要它，赋值不够
+EXPECTED_REF="${DSH_EXPECTED_REF:-dsh-v0.2.2-alpha.3}"
+EXPECTED_COMMIT="${DSH_EXPECTED_COMMIT:-}"
+DSH_VERSION="0.2.2-alpha.3"
+
+log() { echo "[bootstrap] $*"; }
+fail() { echo "[bootstrap][fatal] $*" >&2; exit 1; }
+
+# ---------- 步骤 0：版本前置校验（fail-closed） ----------
+[ -d "$DSH_DIR/.git" ] || fail "DSH checkout 缺失：$DSH_DIR（请先挂载并 checkout 到 $EXPECTED_REF）"
+[ -d "$SEXTANT_DIR" ] || fail "sextant checkout 缺失：$SEXTANT_DIR"
+current_ref="$(git -C "$DSH_DIR" describe --tags 2>/dev/null || git -C "$DSH_DIR" rev-parse --short HEAD)"
+if [ "$current_ref" != "$EXPECTED_REF" ]; then
+  fail "DSH ref 不符：当前 $current_ref，期望 $EXPECTED_REF（请 checkout 后重试）"
+fi
+if [ -n "$EXPECTED_COMMIT" ]; then
+  current_commit="$(git -C "$DSH_DIR" rev-parse HEAD)"
+  [ "$current_commit" = "$EXPECTED_COMMIT" ] || fail "DSH commit 不符：$current_commit != $EXPECTED_COMMIT"
+fi
+log "步骤 0 通过：DSH=$current_ref commit=$(git -C "$DSH_DIR" rev-parse --short HEAD)"
+
+# ---------- 步骤 1：DSH pnpm install ----------
+if [ -d "$DSH_DIR/node_modules" ]; then
+  log "步骤 1 跳过：node_modules 已存在"
+else
+  log "步骤 1：DSH pnpm install（--frozen-lockfile；浅克隆先 git fetch --tags）"
+  (cd "$DSH_DIR" && corepack pnpm install --frozen-lockfile)
+fi
+
+# ---------- 步骤 2：native 完整构建（landlock-run + system.node） ----------
+# 完整构建（不带 --host-addon-only）：landlock-run 为 workspace-write 沙箱必需。
+if [ -x "$DSH_DIR/native/system/packages/linux-x64/bin/landlock-run" ] \
+   && [ -f "$DSH_DIR/native/system/packages/linux-x64/bin/glibc/system.node" ]; then
+  log "步骤 2 跳过：native 产物已存在"
+else
+  log "步骤 2：native 完整构建（landlock-run + system.node）"
+  (cd "$DSH_DIR" && node native/system/scripts/build.ts)
+fi
+"$DSH_DIR/native/system/packages/linux-x64/bin/landlock-run" --probe \
+  || fail "landlock-run --probe 失败（内核 <5.13？参考运行手册 bwrap 后备路径）"
+
+# ---------- 步骤 3：DSH lib + web 构建 ----------
+if [ -f "$DSH_DIR/apps/cli/lib/bin.js" ] && [ -d "$DSH_DIR/apps/web/dist" ]; then
+  log "步骤 3 跳过：lib/web 构建产物已存在"
+else
+  log "步骤 3：DSH build:lib:host / build:lib:client / build:web"
+  (cd "$DSH_DIR" && NODE_OPTIONS=--max-old-space-size=6144 \
+    corepack pnpm run build:lib:host && \
+    corepack pnpm run build:lib:client && \
+    corepack pnpm run build:web)
+fi
+[ -f "$DSH_DIR/apps/cli/lib/bin.js" ] || fail "apps/cli/lib/bin.js 未产出（build:lib:host 失败？）"
+
+# ---------- 步骤 4：sextant 安装 + 同构建 ----------
+# 幂等标记记录 sextant/dsh 两端 commit：任一变化即重跑同步，防止沿用旧产物/旧 catalog。
+marker="$SEXTANT_DIR/.dsh-integration-done"
+want_marker="sextant_commit=$(git -C "$SEXTANT_DIR" rev-parse HEAD 2>/dev/null || echo unknown) dsh_commit=$(git -C "$DSH_DIR" rev-parse HEAD)"
+if [ -f "$marker" ] && [ "$(cat "$marker")" = "$want_marker" ]; then
+  log "步骤 4 跳过：build:dsh-integration 已完成（commit 未变）"
+else
+  log "步骤 4：sextant pnpm install + build:dsh-integration（同构建）"
+  (cd "$SEXTANT_DIR" && corepack pnpm install --frozen-lockfile && corepack pnpm run build:dsh-integration)
+  printf '%s\n' "$want_marker" > "$marker"
+fi
+
+# ---------- 步骤 5：catalog 门禁 + profile 生成 ----------
+# 统一以 DSH_HOME 指向运行态根（与镜像运行示例一致）：setup 脚本 dshHome() 是
+# DSH_HOME 优先、否则 $HOME/.dsh——只覆盖 HOME 会把 profile 落到 .dsh/ 子层，
+# 与运行期 resolveDshHome() 的 $DSH_HOME 差一层 .dsh → profile not found（P1 修复）。
+log "步骤 5：verify:dsh-build + setup:dsh-web-profile"
+export DSH_HOME="$DSH_HOME_DIR"
+# 门禁默认执行（12/12）；重复引导且产物未变时可以显式跳过：
+#   SEXTANT_BOOTSTRAP_SKIP_VERIFY=1 sextant-bootstrap   （约省 1–2 分钟）
+if [ "${SEXTANT_BOOTSTRAP_SKIP_VERIFY:-0}" = "1" ]; then
+  log "步骤 5 跳过 verify:dsh-build（SEXTANT_BOOTSTRAP_SKIP_VERIFY=1）"
+else
+  (cd "$SEXTANT_DIR" && DSH_SOURCE_DIR="$DSH_DIR" corepack pnpm run verify:dsh-build) \
+    || fail "verify:dsh-build 未通过（12/12）"
+fi
+(cd "$SEXTANT_DIR" && DSH_SOURCE_DIR="$DSH_DIR" \
+  corepack pnpm run setup:dsh-web-profile) \
+  || fail "setup:dsh-web-profile 失败"
+[ -d "$DSH_HOME_DIR/profiles/sextant-web" ] || fail "profile 未落到 \$DSH_HOME/profiles（P1 校验失败）"
+
+# ---------- 步骤 6：dsh launcher + 版本断言 ----------
+# sextant process Worker 以 SEXTANT_DSH_EXECUTABLE（默认 PATH 上的 dsh）拉起
+# `dsh --profile sextant-worker`；DSH 源码包 bin=apps/cli/lib/bin.js。
+# launcher 落在 $DSH_HOME/bin（持久卷）而不是只写容器层：容器重建后
+# /usr/local/bin 丢失，但卷上的 launcher 仍在，重跑引导只需重建软链（秒级）。
+LAUNCHER_DIR="$DSH_HOME_DIR/bin"
+LAUNCHER="$LAUNCHER_DIR/dsh"
+if [ ! -x "$LAUNCHER" ]; then
+  log "步骤 6：安装 dsh launcher 到 $LAUNCHER"
+  mkdir -p "$LAUNCHER_DIR"
+  printf '%s\n' '#!/bin/sh' \
+    "# dsh launcher（由 sextant-bootstrap 生成；DSH checkout 于 ${DSH_DIR}）" \
+    "exec ${NODE_EXE:-/opt/node24/bin/node} ${DSH_DIR}/apps/cli/lib/bin.js \"\$@\"" \
+    > "$LAUNCHER"
+  chmod 0755 "$LAUNCHER"
+fi
+# PATH 入口：每次引导都校准软链（容器重建后仅这一步需要重做）。
+if [ "$(readlink -f /usr/local/bin/dsh 2>/dev/null)" != "$LAUNCHER" ]; then
+  log "步骤 6：校准 /usr/local/bin/dsh -> $LAUNCHER"
+  sudo ln -sfn "$LAUNCHER" /usr/local/bin/dsh
+fi
+dsh_version="$("$LAUNCHER" --version 2>/dev/null | head -1)"
+[ "$dsh_version" = "$DSH_VERSION" ] || fail "dsh --version 不符：$dsh_version != $DSH_VERSION"
+
+# ---------- 步骤 7：构建清单 ----------
+log "步骤 7：写构建清单"
+{
+  echo "{"
+  echo "  \"dsh_ref\": \"$current_ref\","
+  echo "  \"dsh_commit\": \"$(git -C "$DSH_DIR" rev-parse HEAD)\","
+  echo "  \"sextant_commit\": \"$(git -C "$SEXTANT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)\","
+  echo "  \"bootstrapped_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  echo "}"
+} > "$DSH_HOME_DIR/sextant-build-manifest.json"
+
+log "完成：bootstrap 全链路通过。启动控制台见镜像说明（docker exec + dsh --profile sextant-web）。"

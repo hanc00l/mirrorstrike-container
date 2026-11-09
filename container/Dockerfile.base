@@ -1,0 +1,294 @@
+# =============================================================================
+# Dockerfile.base — 三模板公共基础镜像（agent / tsec-hosted / sextant 共享）
+#
+# 2026-11-09 自原完整版 Dockerfile 抽出。内容 = 三者最大交集：
+#   - Kali 渗透/CTF/Pwn/逆向 apt 工具面（不含 qemu 系——tsec-hosted 有意排除，
+#     由 agent / sextant 变体层各自补装）
+#   - pinned 资产（chisel/grpcurl/jadx/apktool/capa/Temurin JDK21，URL+SHA256 锁定）
+#   - Android 逆向栈（/opt/android）+ capa（/opt/capa）
+#   - JDK8（sdkman zulu，剔 JavaFX）
+#   - Node 24 pinned（统一基线 ≥24.9，覆盖 pi ≥22.19 与 DSH/Sextant ≥24.9）
+#     + corepack + pnpm 双版本（12.16.1=Sextant / 11.28.5=DSH workspace，预置防离线首跑联网）
+#   - kali 用户 + sudo 免密、nmap 入口修复、nuclei 离线配置、/opt/* 占位目录
+# 不含：qemu 系、semgrep、pi-coding-agent、PG/Redis server、sextant-bootstrap。
+# apt 源可配 --build-arg KALI_MIRROR；升级 Node 只改 NODE24_URL + NODE24_SHA256。
+# =============================================================================
+FROM --platform=amd64 kalilinux/kali-rolling:latest
+
+# ---------- 版本号集中管理（改版本只动这里）----------
+ARG JDK8=8.0.482.fx-zulu
+# 浏览器层（chromium + playwright npm）默认开；--build-arg WITH_PLAYWRIGHT=0 关闭
+ARG WITH_PLAYWRIGHT=1
+# 云 CLI 族（awscli/trivy）：d 类红区题面拍板后再开
+ARG WITH_CLOUD=0
+# exploitdb（searchsploit，~60MB）默认开；--build-arg WITH_EXPLOITDB=0 关闭
+ARG WITH_EXPLOITDB=1
+# kubectl（~55MB，dict-base 清单硬承诺）默认开
+ARG WITH_KUBECTL=1
+
+# pinned 增补资产（URL+SHA256 构建期校验，升级须同步更新）
+ARG CHISEL_URL=https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.deb
+ARG CHISEL_SHA256=0c7e4abb892faca44dbc9b7363af27e3859b68492e10771fea446fd5e8535e5d
+ARG GRPCURL_URL=https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_amd64.deb
+ARG GRPCURL_SHA256=0710dc05a28f1fac2230fd438c1fc61b90e0431809372a65aea4b53a57947451
+
+# Android 逆向 pinned 资产（与 mirrorstrike deploy/reverse-static/tool-lock.json 一致）
+ARG ANDROID_JDK_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz
+ARG ANDROID_JDK_SHA256=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
+ARG JADX_URL=https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar
+ARG APKTOOL_SHA256=eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd
+ARG CAPA_URL=https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip
+ARG CAPA_SHA256=07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4
+
+# Node 24 pinned（统一基线：DSH/Sextant 硬要求 ≥24.9，覆盖 pi ≥22.19；升级只改这里）
+# SHA256 来源 https://nodejs.org/dist/v24.9.0/SHASUMS256.txt；安装保留 include/（DSH
+# native/system 构建依赖 include/node 头文件）
+ARG NODE24_URL=https://nodejs.org/dist/v24.9.0/node-v24.9.0-linux-x64.tar.xz
+ARG NODE24_SHA256=f52ec50e959d72d5c680d9731420b2661cd2a8070e94c7369b6ddfcd8b7278be
+# pnpm 双版本：Sextant packageManager=12.16.1；DSH workspace packageManager=11.28.5
+ARG PNX_SEXTANT=12.16.1
+ARG PNX_DSH=11.28.5
+
+ENV TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_MCP_BROWSER=chromium \
+    NUCLEI_TEMPLATES_DIR=/opt/kb/kb-resource/nuclei-templates
+
+# ---------- 1. base（固定 apt 源，避免 mirrorbrain 重定向到失效 mirror 如 neusoft）----------
+ARG KALI_MIRROR="http://kali.download/kali"
+RUN rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list && \
+    echo "deb ${KALI_MIRROR} kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+# ---------- 2. apt 工具大合并（渗透 + CTF + Pwn + 逆向，显式最小清单）----------
+# 与原完整版一致，仅剔除 qemu-user/-static + libc6-dbg（变体层补装，见 §5 分层）。
+# 客户端直装（无 server 端组件）：mysql=default-mysql-client、psql=postgresql-client、
+# redis-cli=redis-tools；零预装字典（平台 dicts/ 承担）；dnsrecon 保留。
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
+    apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
+      ca-certificates curl wget git sudo less vim-tiny file \
+      procps psmisc iproute2 iputils-ping iputils-arping tmux rlwrap libcap2-bin \
+      bsdextrautils npm jq yq bc sqlite3 ripgrep fd-find php-cli python3-setuptools \
+      openssh-client sshpass netcat-openbsd ncat socat tcpdump tshark dnsutils whois proxychains4 \
+      nmap masscan nuclei naabu sqlmap gobuster ffuf feroxbuster \
+      dnsrecon wafw00f whatweb \
+      hydra john hashid fcrackzip gitleaks \
+      python3-impacket evil-winrm netexec smbclient enum4linux-ng bloodyad coercer \
+      ldap-utils \
+      default-mysql-client postgresql-client redis-tools \
+      gdb gdb-multiarch strace ltrace binutils xxd radare2 yara patchelf checksec make \
+      gcc libc6-dev \
+      binwalk foremost steghide exiftool unzip zip p7zip-full unrar-free xz-utils \
+      tesseract-ocr tesseract-ocr-chi-sim \
+      adb apksigner zipalign aapt \
+      python3 python3-pip python3-venv python3-paramiko \
+      python3-numpy python3-sympy python3-pil python3-lxml \
+      python3-jwt python3-pymongo python3-psycopg2 python3-pymysql \
+      ruby && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+# pg8000（dict-base 清单）无 apt 包：pip 单包补齐，失败不阻断（非核心依赖）
+RUN pip3 install --no-cache-dir pg8000 || echo "[warn] pg8000 pip 安装失败，非核心依赖，继续构建"
+
+# ---------- 2b. pinned 单架构工具：chisel + grpcurl（URL+SHA256 校验）----------
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/chisel.deb "${CHISEL_URL}"; \
+    echo "${CHISEL_SHA256}  /tmp/chisel.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/chisel.deb; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/grpcurl.deb "${GRPCURL_URL}"; \
+    echo "${GRPCURL_SHA256}  /tmp/grpcurl.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/grpcurl.deb; \
+    rm -f /tmp/chisel.deb /tmp/grpcurl.deb; \
+    chisel --version; grpcurl --version
+
+# ---------- 2b+. 增补兼容软链：Debian 系 fd-find 二进制名为 fdfind，补 fd 别名 ----------
+RUN command -v fdfind >/dev/null 2>&1 && ln -sf "$(command -v fdfind)" /usr/local/bin/fd; \
+    command -v rg >/dev/null 2>&1; command -v fd >/dev/null 2>&1
+
+# ---------- 2b*. nmap 入口修复（两档皆稳；root 沿用原逻辑，非 root 降级 connect 扫描）----------
+RUN setcap cap_net_raw,cap_net_bind_service=eip /usr/lib/nmap/nmap && \
+    printf '%s\n' '#!/usr/bin/env sh' 'set -e' \
+      '# nmap 入口：root 沿用原逻辑；非 root 强制 --unprivileged 自动降级 connect 扫描' \
+      'if [ "$(id -u)" -eq 0 ]; then exec /usr/lib/nmap/nmap "$@"; fi' \
+      'exec /usr/lib/nmap/nmap --unprivileged "$@"' > /usr/local/bin/nmap && \
+    chmod 0755 /usr/local/bin/nmap && \
+    nmap --version | head -1
+
+# ---------- 2c. 可选层：exploitdb（searchsploit）/ 云 CLI 族 / kubectl ----------
+RUN set -eux; \
+    if [ "$WITH_EXPLOITDB" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends exploitdb && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_CLOUD" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends awscli trivy && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    if [ "$WITH_KUBECTL" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends kubectl && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    command -v kubectl || echo "[warn] kubectl 未启用（WITH_KUBECTL=0）"; \
+    kubectl version --client=true 2>/dev/null | head -1 || true
+
+# ---------- 3. pip / gem（Pwn + CTF 必备）----------
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -o Acquire::Retries=10 -o Acquire::http::Timeout=60 && \
+    apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=10 -o Acquire::http::Timeout=60 \
+      python3-pwntools python3-ropgadget python3-z3 \
+      python3-pycryptodome python3-requests python3-bs4 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    gem install one_gadget --no-document
+
+# ---------- 3b. Node 24 pinned（统一基线）+ corepack + pnpm 双版本 ----------
+# include/ 必须保留：DSH native/system/scripts/build.ts 依赖 include/node 头文件。
+# pnpm 预置两版：corepack 按各 checkout 的 packageManager 字段自动切换；
+# 预置可避开离线环境首次 pnpm 触发的联网下载。
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/node24.tar.xz "${NODE24_URL}"; \
+    echo "${NODE24_SHA256}  /tmp/node24.tar.xz" | sha256sum -c -; \
+    mkdir -p /opt/node24; \
+    tar -xJf /tmp/node24.tar.xz -C /opt/node24 --strip-components=1; \
+    rm -f /tmp/node24.tar.xz; \
+    ln -sf /opt/node24/bin/node /usr/local/bin/node; \
+    ln -sf /opt/node24/bin/npm  /usr/local/bin/npm; \
+    ln -sf /opt/node24/bin/npx  /usr/local/bin/npx; \
+    ln -sf /opt/node24/bin/corepack /usr/local/bin/corepack
+ENV PATH=/opt/node24/bin:${PATH}
+# 构建期版本门（对全部模板生效）
+RUN node -e 'const v=process.versions.node.split(".").map(Number);if(v[0]<24||(v[0]===24&&v[1]<9)){console.error("[fatal] 统一 Node 基线要求 >= 24.9，当前 "+process.versions.node);process.exit(1)}'
+# corepack enable 必须显式 --install-directory：若经 /usr/local/bin 符号链接发现 corepack，
+# shim 会落在 /usr/local/bin 且内部按相对路径 require corepack 主模块 → MODULE_NOT_FOUND。
+# 另：Node 24.9 自带 corepack 0.34 不支持 pnpm ≥12 新 bin 布局（bin/pnpm 无 .cjs 后缀，
+# 报 Cannot find module '.../bin/pnpm.cjs'）→ 升级 corepack 0.36（pnpm12 走原生二进制下载）。
+# COREPACK_HOME 固定到 /opt/corepack-home 并烘入双版本：默认落 ~/.cache 时 lastKnownGood
+# 是 per-user 的，运行期 kali 首跑 pnpm 会现场下载 latest（不受 --activate 钉住）。
+# /etc/profile.d/node24.sh：登录 shell 被 /etc/profile 重置 PATH，补回 Node24/corepack。
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    COREPACK_HOME=/opt/corepack-home
+RUN npm install -g corepack@0.36.0 && \
+    corepack enable --install-directory /opt/node24/bin && \
+    corepack prepare pnpm@${PNX_SEXTANT} --activate && \
+    corepack prepare pnpm@${PNX_DSH} && \
+    pnpm --version && command -v pnpm && \
+    mkdir -p /opt/corepack-home && chmod -R a+rX /opt/corepack-home && \
+    printf '%s\n' '# Node24/corepack 基线（/etc/profile 会重置 PATH，此处补回）' \
+      'export PATH="/opt/node24/bin:${PATH}"' \
+      'export COREPACK_ENABLE_DOWNLOAD_PROMPT=0' \
+      'export COREPACK_HOME=/opt/corepack-home' \
+      > /etc/profile.d/node24.sh
+
+# ---------- 4. 用户 + 目录占位 ----------
+# kali(uid 1000) + sudo 免密：高安全档以镜像默认用户运行。
+# /opt/tools、/opt/kb 为运行时挂载点（只读），镜像内不装任何工具。
+RUN useradd -m -s /bin/bash kali && \
+    echo 'kali ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers && \
+    mkdir -p /opt/tools /opt/kb /opt/workspace /opt/deepstrike /opt/traffic \
+             /opt/mirrorstrike/pi-agent/agents /opt/mirrorstrike/logs/agent \
+             /home/kali/.config/nuclei && \
+    chown -R kali:kali /opt/tools /opt/kb /opt/workspace /opt/deepstrike /opt/traffic \
+                       /opt/mirrorstrike /home/kali/.config
+
+# ---------- 4b. Android 逆向层：jadx + apktool + jlink 裁剪 JRE（pinned）----------
+RUN set -eux; \
+    mkdir -p /tmp/android-build /opt/android; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/jdk21.tar.gz "${ANDROID_JDK_URL}"; \
+    echo "${ANDROID_JDK_SHA256}  /tmp/jdk21.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/jdk21.tar.gz -C /tmp/android-build; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/jadx.zip "${JADX_URL}"; \
+    echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c -; \
+    unzip -q /tmp/jadx.zip -d /opt/android/jadx; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /opt/android/apktool.jar "${APKTOOL_URL}"; \
+    echo "${APKTOOL_SHA256}  /opt/android/apktool.jar" | sha256sum -c -; \
+    jdk21_dir="$(find /tmp/android-build -maxdepth 1 -type d -name 'jdk-21*' | head -1)"; \
+    mods="$("${jdk21_dir}/bin/jdeps" --print-module-deps --ignore-missing-deps \
+      /opt/android/jadx/lib/*.jar /opt/android/apktool.jar 2>/dev/null || true)"; \
+    if [ -z "${mods}" ]; then \
+      mods="java.base,java.logging,java.xml,java.naming,java.desktop,java.management,java.sql,java.net.http,jdk.unsupported,jdk.crypto.ec,jdk.zipfs"; \
+    fi; \
+    echo "android JRE modules: ${mods}"; \
+    "${jdk21_dir}/bin/jlink" --add-modules "${mods}" --strip-debug --no-header-files \
+      --compress zip-6 --output /opt/android/jre; \
+    rm -rf /tmp/jdk21.tar.gz /tmp/jadx.zip /tmp/android-build; \
+    printf '%s\n' '#!/bin/sh' \
+      '# android 工具显式指向裁剪 JRE21（默认 java 仍为 JDK8，互不污染）' \
+      'export JAVA_HOME=/opt/android/jre' \
+      'export PATH="/opt/android/jre/bin:${PATH}"' \
+      'exec /opt/android/jadx/bin/jadx "$@"' > /usr/local/bin/jadx; \
+    printf '%s\n' '#!/bin/sh' \
+      'export JAVA_HOME=/opt/android/jre' \
+      'exec /opt/android/jre/bin/java -jar /opt/android/apktool.jar "$@"' > /usr/local/bin/apktool; \
+    chmod 0755 /usr/local/bin/jadx /usr/local/bin/apktool; \
+    /usr/local/bin/jadx --version; \
+    /usr/local/bin/apktool --version
+
+# ---------- 4c. capa：恶意软件能力识别单二进制 + 离线规则（pinned）----------
+# capa-rules 为「零 GitHub 下载」唯一例外（待固定 commit 收口，见 AGENTS.md 复核待办）。
+RUN set -eux; \
+    mkdir -p /opt/capa; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/capa.zip "${CAPA_URL}"; \
+    echo "${CAPA_SHA256}  /tmp/capa.zip" | sha256sum -c -; \
+    unzip -q /tmp/capa.zip -d /tmp/capa-unpack; \
+    capa_bin="$(find /tmp/capa-unpack -type f -name capa | head -1)"; \
+    install -m 0755 "${capa_bin}" /opt/capa/capa; \
+    ln -sf /opt/capa/capa /usr/local/bin/capa; \
+    for i in 1 2 3; do \
+      if git clone --depth 1 https://github.com/mandiant/capa-rules.git /opt/capa/rules; then break; fi; \
+      rm -rf /opt/capa/rules; sleep 5; \
+    done; \
+    test -d /opt/capa/rules/.git; \
+    rm -rf /opt/capa/rules/.git /tmp/capa.zip /tmp/capa-unpack; \
+    capa --version
+
+USER kali
+
+# ---------- 6b. 可选浏览器层（默认开；--build-arg WITH_PLAYWRIGHT=0 关闭）----------
+RUN if [ "$WITH_PLAYWRIGHT" = "1" ]; then \
+      sudo apt-get update && \
+      sudo apt-get install -y --no-install-recommends chromium xvfb libgtk-3-0 libgbm1 && \
+      sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/* && \
+      sudo npm install -g playwright @playwright/mcp; \
+      printf '%s\n' '#!/bin/sh' \
+        '# 浏览器自动化统一入口（dict-base AGENTS.md 对齐）：系统 Chromium，免下载浏览器' \
+        'export PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium' \
+        'exec playwright "$@"' > /tmp/playwright-cli; \
+      chmod 0755 /tmp/playwright-cli && sudo mv /tmp/playwright-cli /usr/local/bin/playwright-cli; \
+    fi; \
+    playwright-cli --version >/dev/null 2>&1 || echo "[warn] 浏览器层未启用（WITH_PLAYWRIGHT=0），playwright-cli 缺席"
+
+# ---------- 7. SDKMAN JDK8（单 JDK：fx 变体安装后剔除 JavaFX）----------
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+      "https://get.sdkman.io" -o /tmp/sdkman-install.sh; \
+    bash /tmp/sdkman-install.sh; \
+    bash -lc 'source "$HOME/.sdkman/bin/sdkman-init.sh" && \
+              sdk install java ${JDK8} && \
+              sdk default java ${JDK8}'; \
+    find "$HOME/.sdkman/candidates/java/current" \( -iname "*jfx*" -o -iname "javafx*" \) \
+      \( -name "*.jar" -o -name "*.so" -o -name "*.diz" \) -delete && \
+    rm -rf "$HOME/.sdkman/archives"/* "$HOME/.sdkman/tmp"/* /tmp/sdkman-install.sh
+ENV JAVA_HOME=/home/kali/.sdkman/candidates/java/current
+ENV PATH=/home/kali/.sdkman/candidates/java/current/bin:${PATH}
+
+# ---------- 8. nuclei 离线模板指向挂载路径（禁联网更新；kb-resource 结构与平台契约一致）----------
+RUN printf '%s\n' 'disable-update-check: true' 'update-template-dir: /opt/kb/kb-resource/nuclei-templates' \
+      > /home/kali/.config/nuclei/config.yaml
+
+# ---------- 9. shell 提示 + gdb 自动加载 + git 身份 + 登录 shell 的 java PATH ----------
+RUN printf '%s\n' 'PS1="${PS1%\\n*} \[\033[0;36m\]\D{%y-%m-%d} - \t\[\033[;32m\]\n${PS1##*\\n}"' >> /home/kali/.bashrc && \
+    echo 'set auto-load safe-path /' >> /home/kali/.gdbinit && \
+    echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> /home/kali/.profile && \
+    git config --global user.email "agent@mirrorstrike" && \
+    git config --global user.name "mirrorstrike-agent"
+
+# base 镜像不直接运行；变体各自定义 WORKDIR/CMD
+CMD ["/bin/bash"]
